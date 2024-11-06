@@ -11,10 +11,6 @@ build/
 dist/
 *.egg-info/
 
-# Ignore GitHub README and logo
-README.md
-logo.png
-
 # System files
 .DS_Store
 Thumbs.db
