@@ -3,6 +3,7 @@ from tkinter import ttk
 from adriq.ad9910 import *
 from adriq.Counters import *
 from adriq.RedLabs_Dac import *
+from adriq.pulse_sequencer import *
 
 # Assuming the following classes are defined elsewhere
 # from your_module import LoadControlPanel, TrapControlFrame, get_pmt_manager
@@ -14,7 +15,7 @@ class ControlApp(tk.Tk):
     
         super().__init__()
         self.title("Control Application")
-        self.geometry("1400x1200")  # Adjusted width to accommodate both panels
+        self.geometry("600x1200")  # Adjusted width to accommodate both panels
 
         # Initialize LoadControlPanel with correct parameters
         self.load_control_panel = LoadControlPanel(self, PMT_Reader, Threshold=2000, Timeout=100)
@@ -24,6 +25,8 @@ class ControlApp(tk.Tk):
         self.trap_control_frame = TrapControlFrame(self, QuTau_Reader, default_h=-1.27, default_v=-0.495, default_trap_depth=0.8)
         self.trap_control_frame.place(x=300, y=470, anchor="nw", width=580, height=380)  # Adjust coordinates and size as needed
 
+        self.pulse_sequencer_frame = PulseSequencerFrame(self, defaultbitstring="0100000000000000", pulse_sequencer_port="COM5")
+        self.pulse_sequencer_frame.place(x=10, y=650, anchor="nw", width=300, height=50)  # Adjust coordinates and size as needed
     
         self.laser_control = LaserControl(self)
         for laser in self.lasers:

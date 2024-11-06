@@ -26,6 +26,8 @@ from .Custom_Tkinter import CustomSpinbox, CustomIntSpinbox
 from .Counters import sine_wave, MicromotionWindow
 from .Servers import Server
 
+from adriq.pulse_sequencer import *
+
 #at the moment i initialise the dac every time it is addressed
 #This is to avoid any potential errors with addressing long after initialisation
 #can be changed in the future but doesn't have a big effect as this is fast compared to what we want to do with the dac.
@@ -203,7 +205,6 @@ class TrapControlFrame(tk.Frame):
         self.spinbox_V = CustomSpinbox(static_frame, from_=-5.0, to=5.0, increment=0.0001, initial_value=default_v)
         self.spinbox_V.grid(row=1, column=1, padx=5, pady=5)
         self.spinbox_V.set_callback(self.update_V)
-
 
         self.label_trap_depth = tk.Label(static_frame, text="Trap Depth Voltage:")
         self.label_trap_depth.grid(row=2, column=0, padx=5, pady=5)
@@ -671,7 +672,7 @@ class LoadControlPanel(tk.Frame):
     def create_widgets(self):
         # Threshold input
         ttk.Label(self.control_frame, text="Threshold:").grid(row=0, column=0, padx=10, pady=10, sticky="e")
-        self.threshold_entry = CustomIntSpinbox(self.control_frame, from_=0, to=None, initial_value=2000, textvariable=self.Threshold)
+        self.threshold_entry = CustomIntSpinbox(self.control_frame, from_=0, to=None, initial_value=self.Threshold, textvariable=self.Threshold)
         self.threshold_entry.grid(row=0, column=1, padx=10, pady=10)
 
         # Timeout input
@@ -727,6 +728,7 @@ class LoadControlPanel(tk.Frame):
         # Reset pins and update the UI button
         self.reset_pins()
         self.start_button.config(text="Start", command=self.start_load)
+        self.loading = False
 
         # Check if it was counting and stop counting if true
         if not self.was_counting:

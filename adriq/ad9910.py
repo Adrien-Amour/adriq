@@ -319,11 +319,26 @@ def single_tone_profile_bytes(
     return [byte1, byte2, byte3, byte4, byte5, byte6, byte7, byte8], true_frequency, true_phase_offset
 
 def ram_profile_bytes(
-    PLL_Multiplier=40, Amplitude_Ramp_Rate_Divider=1, Start_Address=0, End_Address=1, No_Dwell_High=True, Zero_Crossing=False, Profile_Mode='000'):
+    PLL_Multiplier=40, Amplitude_Ramp_Rate_Divider=1, Start_Address=0, End_Address=1, No_Dwell_High=True, Zero_Crossing=False, Profile_Mode="Direct Switch"):
     Frequency_Sys_CLK = PLL_Multiplier * 25E6
     Amplitude_Ramp_Rate_Divider_Bin = format(Amplitude_Ramp_Rate_Divider, '016b') # step size in seconds
     End_Address_Bin = format(End_Address, '010b')
     Start_Address_Bin = format(Start_Address, '010b')
+    
+    # Dictionary mapping mode names to control bits
+    mode_control_bits = {
+        "Direct Switch": "000",
+        "Ramp-Up": "001",
+        "Bidirectional Ramp": "010",
+        "Continuous Bidirectional ramp": "011",
+        "Continuous Recirculate": "100"
+    }
+
+    # Check if the provided Profile_Mode is valid
+    if Profile_Mode not in mode_control_bits:
+        raise ValueError(f"Invalid Profile_Mode '{Profile_Mode}'. Must be one of {list(mode_control_bits.keys())}.")
+    # Get the control bits for the selected mode
+    control_bits = mode_control_bits[Profile_Mode]
 
     bits = [0] * 64  # Initialize a 32-bit list with all bits set to 0
 
@@ -334,11 +349,10 @@ def ram_profile_bytes(
     bits[24:30] = [0] * 6  # Bits 24-29 are open so 0
     bits[14:24] = [int(Start_Address_Bin[9-i]) for i in range(10)] # Amplitude scale factor
     bits[6:14] = [0]*8
-    bits[5] = 1 if No_Dwell_High else 0
+    bits[5] = 0 if No_Dwell_High else 1 #admittedly, i am confused by this. The datasheet says that the bit should be 0 for no dwell high, but the bit should be 1 for no dwell high, but the behaviour is the opposite
     bits[4] = 0 #open
     bits[3] = 1 if Zero_Crossing else 0
-    bits[0:3] = [int(Profile_Mode[2-i]) for i in range(3)]
-
+    bits[0:3] = [int(control_bits[2 - i]) for i in range(3)]
     bitstring = bits[::-1] # reverse the inputs to get the desired bitstring (bit ordering convention is the opposite to string ordering)
 
     bitstring = ''.join(map(str, bitstring))
@@ -353,23 +367,40 @@ def ram_profile_bytes(
     byte7 = int(bitstring[48:56], 2)
     byte8 = int(bitstring[56:64], 2)
     Temporal_Step_Size = (4 / Frequency_Sys_CLK) * Amplitude_Ramp_Rate_Divider
+
     return [byte1, byte2, byte3, byte4, byte5, byte6, byte7, byte8], Temporal_Step_Size
 
-def ram_word_bytes(Array, Mode=2, PLL_Multiplier=40):
+def ram_word_bytes(Array, Mode="Amplitude", PLL_Multiplier=40):
     #function to obtain RAM control words for all modulation modes modulation from input array containing desired frequencies
     Array = np.round(Array).astype(int)#intify
     Array = Array[::-1] #reverse array, it will be reverse again upon writing to the DDS
     ram_bytes = []
-    if Mode == 0:
+
+    
+    # Dictionary to map mode names to integer codes
+    mode_codes = {
+        "Frequency": 0,
+        "Phase": 1,
+        "Amplitude": 2
+    }
+
+    # Validate Mode input
+    if Mode not in mode_codes:
+        raise ValueError(f"Invalid Mode '{Mode}'. Must be one of {list(mode_codes.keys())}.")
+
+    # Get the integer code for the provided Mode
+    Mode_Code = mode_codes[Mode]
+
+    if Mode_Code == 0:
         for frequency in Array:
             element_bytes, _ = ftw_bytes(PLL_Multiplier=PLL_Multiplier, Frequency=frequency)
             ram_bytes.extend(element_bytes)
-    if Mode == 1:
+    if Mode_Code == 1:
         for phase_offset in Array:
             element_bytes, _ = pow_bytes(Phase_Offset=phase_offset)
             element_bytes.extend([0,0])
             ram_bytes.extend(element_bytes)
-    if Mode == 2:
+    if Mode_Code == 2:
         for amplitude in Array:
             bits = [0] * 32  # Initialize a 32-bit list with all bits set to 0
             amplitude_bin = format(amplitude, '014b')  # Assuming Amplitude is within the range that fits in 14 bits
@@ -572,15 +603,20 @@ def single_tone_profile_setting(Port, Board, Profile, PLL_Multiplier=40, Amplitu
         raise ValueError("Profile must be an integer between 0 and 7")
 
 def write_ram(Port, Board, Mode, Array, Frequency=None, Amplitude=None, Phase=None, PLL_Multiplier=40, Show_RAM=False, Verbose=False):
+    # # Print all arguments except Array on one line
+    # print(f"Port: {Port}, Board: {Board}, Mode: {Mode}, Frequency: {Frequency}, Amplitude: {Amplitude}, Phase: {Phase}, PLL_Multiplier: {PLL_Multiplier}, Show_RAM: {Show_RAM}, Verbose: {Verbose}")
+    
+    # # Print the Array on the next line
+    # print("Array:", Array)
     length = len(Array)
     if length > 1020:
         raise ValueError(f"Ram is maximum of 1020 words long. Provided array is {length} long. Ram write operation aborted.")
     Array = np.round(Array).astype(int)
     if Show_RAM:
-        x_values = [i for i in range(len(Array))]
+        x_values = [i  for i in range(len(Array))]
         plt.plot(x_values, Array)
         plt.title('Pulse Shape')
-        plt.xlabel('Time (microseconds)')
+        plt.xlabel('Word Number')
         if Mode == 0:
             plt.ylabel('Frequency')
         if Mode == 1:
@@ -612,7 +648,7 @@ def write_ram(Port, Board, Mode, Array, Frequency=None, Amplitude=None, Phase=No
     write_to_ad9910(Port, "RAM", Board, RAM_Bytes, Verbose=Verbose)
 
 def ram_profile_setting(Port, Board, Profile,
-    PLL_Multiplier=40, Amplitude_Ramp_Rate_Divider=1, Start_Address=0, End_Address=1, No_Dwell_High=True, Zero_Crossing=False, Profile_Mode='000', Verbose=False):
+    PLL_Multiplier=40, Amplitude_Ramp_Rate_Divider=1, Start_Address=0, End_Address=1, No_Dwell_High=True, Zero_Crossing=False, Profile_Mode='Direct Switch', Verbose=False):
     if isinstance(Profile, int) and 0 <= Profile <= 7:
         Profile_Register = "P" + str(Profile)
         RAM_Profile_Bytes, _ = ram_profile_bytes(PLL_Multiplier=PLL_Multiplier, Amplitude_Ramp_Rate_Divider=Amplitude_Ramp_Rate_Divider, Start_Address=Start_Address, End_Address=End_Address, No_Dwell_High=No_Dwell_High, Zero_Crossing=Zero_Crossing, Profile_Mode=Profile_Mode)

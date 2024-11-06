@@ -1,5 +1,6 @@
 import serial 
 import time
+
 def pulse_out(Port, Bitstring, Verbose = False):
     byte1 = int(Bitstring[0:8], 2)
     byte2 = int(Bitstring[8:16], 2)
@@ -159,14 +160,14 @@ def write_pulse_sequencer(Port, Pulses, Pulse_Lengths, Continuous=False, N_Cycle
         time.sleep(0.01)
 
 def control_pulse_sequencer(Port, Action: str, Verbose=False):
-    if Action == 'Start':
+    if Action == 'start':
         # Bytes to start the pulse sequencer
         byte_array = bytearray([ord('s'), 1, 0, 0, 0])
-    elif Action == 'Stop':
+    elif Action == 'stop':
         # Bytes to stop the pulse sequencer
         byte_array = bytearray([ord('s'), 0, 0, 0, 0])
     else:
-        raise ValueError("Invalid action. Use 'Start' or 'Stop'.")
+        raise ValueError("Invalid action. Use 'start' or 'stop'.")
 
     # Extend the byte_array to 64 bytes with zero padding
     byte_array.extend(bytearray(64 - len(byte_array)))
@@ -201,10 +202,9 @@ from tkinter import ttk
 from .Custom_Tkinter import CustomBinarySpinbox
 
 class PulseSequencerFrame(tk.Frame):
-    def __init__(self, master=None, defaultbitstring="0100000000000000", pulse_sequencer_port="COM5"):
+    def __init__(self, master=None, defaultbitstring="0100000000000000"):
         super().__init__(master)
         self.grid(padx=10, pady=10)
-        self.pulse_sequencer_port = pulse_sequencer_port
         self.create_widgets(defaultbitstring)
 
     def create_widgets(self, defaultbitstring):
@@ -216,13 +216,8 @@ class PulseSequencerFrame(tk.Frame):
         self.spinbox = CustomBinarySpinbox(static_frame, from_=0, to=65535, initial_value=defaultbitstring)
         self.spinbox.grid(row=0, column=1, padx=5, pady=5)
         self.spinbox.set_callback(self.Pulse_Out)
-        
-        defaultbitstring = int(defaultbitstring, 2)
-        self.Pulse_Out(defaultbitstring)
 
     def Pulse_Out(self, value):
-        
+        Port = "COM5"
         Bitstring = format(value, '016b')
-        print(f"Pulse Sequencer Output:{Bitstring}")
-        pulse_out(self.pulse_sequencer_port, Bitstring)
-
+        pulse_out(Port, Bitstring)

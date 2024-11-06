@@ -1,4 +1,4 @@
-from itcm.RedLabs_Dac import *
+from adriq.RedLabs_Dac import *
 
 import tkinter as tk
 from tkinter import ttk

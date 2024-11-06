@@ -1,6 +1,20 @@
-"build/" 
-"*.egg-info/" 
-"__pycache__/" 
-"__pycache__/" 
-"*.pyc" 
-".env" 
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+
+# Virtual environment
+venv/
+env/
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+
+# Ignore GitHub README and logo
+README.md
+logo.png
+
+# System files
+.DS_Store
+Thumbs.db

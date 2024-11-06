@@ -144,7 +144,7 @@ class QuTau_Reader:
     host = 'localhost'
     port = 8001  # Set a unique port number for QuTau_Reader
 
-    def __init__(self, rate=5, N=100, buffersize=1000000, trap_drive_chan=2, pmt_counts_chan=3, single_photon_chan=0):
+    def __init__(self, rate=5, N=100, buffersize=1000000, trap_drive_chan=2, pmt_counts_chan=3, single_photon_chan1=0,single_photon_chan2=1):
         if not hasattr(self, 'initialized'):
             self.qutau = QuTau.QuTau()
             self.rate = rate
@@ -154,9 +154,10 @@ class QuTau_Reader:
             self.buffersize = buffersize
             self.trap_drive_chan = trap_drive_chan
             self.pmt_counts_chan = pmt_counts_chan
-            self.single_photon_chan = single_photon_chan
+            self.single_photon_chan1 = single_photon_chan1
+            self.single_photon_chan2 = single_photon_chan2
             self.devType = self.qutau.getDeviceType()
-            self.active_channels = (self.single_photon_chan, self.pmt_counts_chan)
+            self.active_channels = (self.single_photon_chan1, self.single_photon_chan2)#, self.pmt_counts_chan)
             self.qutau.enableChannels(self.active_channels)
             self.counting = False
             self.initialized = True
@@ -180,20 +181,24 @@ class QuTau_Reader:
 
         # Get the latest timestamps from qutau
         timestamps = self.qutau.getLastTimestamps(True)
-        if len(timestamps[0]) >= self.buffersize:
-            warnings.warn("Buffer limit hit: number of timestamps equals buffer size.")
         tchannel = timestamps[1]  # List of channel identifiers
         tstamp = timestamps[0]    # Corresponding timestamps
+
+        # Filter out trailing zeros in the timestamp array
+        valid_indices = tstamp != 0
+        tchannel = tchannel[valid_indices]
+        tstamp = tstamp[valid_indices]
+
 
         # Use Counter to count occurrences of each channel more efficiently
         channel_counts = Counter(tchannel)
 
         # Generate the count rates list directly using list comprehension
+               # Generate the count rates list directly using list comprehension
         count_rates_list = [
             channel_counts.get(i, 0) * self.rate
-            for i in range(1, max(channel_counts.keys(), default=0) + 1)
+            for i in range(0, max(channel_counts.keys(), default=0) + 1)
         ]
-
         current_time = datetime.now()
 
         end_time = time.time()  # End time for the method
@@ -204,7 +209,7 @@ class QuTau_Reader:
         time.sleep(sleep_time)
 
         return count_rates_list, current_time
-
+ 
     def start_counting(self):
         self.counts = []
         self.times = []
@@ -928,7 +933,7 @@ class LivePlotter(QWidget):
 
         # Label for displaying current count rate
         self.label = QLabel("Current Count Rate: N/A")
-        self.label.setStyleSheet("color: white; font-size: 16pt;")
+        self.label.setStyleSheet("color: red; font-size: 16pt;")
         self.layout.addWidget(self.label)
 
         # Control buttons
