@@ -24,7 +24,7 @@ def pulse_out(Port, Bitstring, Verbose = False):
         ser.close()
         time.sleep(0.01)
     
-def write_pulse_sequencer(Port, Pulses, Pulse_Lengths, Continuous=False, N_Cycles=10000, End_Pulse='0000000000000001', Measurement_Window=1, Threshold_Counts=4, Clock_Frequency=80, Initial_Delay=-33, Delay = 111, Verbose = False):
+def write_pulse_sequencer(Port, Pulses, Pulse_Lengths, Continuous=False, N_Cycles=10000, End_Pulse='0000000000000001', Measurement_Window=1, Threshold_Counts=4, Clock_Frequency=80, Initial_Delay=80, Delay = 115, Final_Delay=185, Verbose = False):
     # Check that Pulses is a list of 16-bit bit strings
     for pulse in Pulses:
         if not isinstance(pulse, str):
@@ -112,9 +112,20 @@ def write_pulse_sequencer(Port, Pulses, Pulse_Lengths, Continuous=False, N_Cycle
         ser.close()
         time.sleep(0.01)
 
-    #now we load the pulses    
+    # #now we load the pulses    
     Pulse_Lengths_Corrected = [(length * Clock_Frequency) - Delay for length in Pulse_Lengths]
     Pulse_Lengths_Corrected[0] -= Initial_Delay
+    Pulse_Lengths_Corrected = []
+    for i, length in enumerate(Pulse_Lengths):
+        corrected_length = (length * Clock_Frequency)
+        if i == 0:
+            corrected_length -= Initial_Delay
+        elif i == len(Pulse_Lengths) - 1:
+            corrected_length -= Final_Delay
+        else:
+            corrected_length -= Delay
+        Pulse_Lengths_Corrected.append(corrected_length)
+
     # Convert Pulse_Lengths_Corrected to 32-bit binary strings
     Pulse_Lengths_Corrected_Bin = [format(length, '032b') for length in Pulse_Lengths_Corrected]
     Pulse_Bytes = [ord('p'), 1, 0]  

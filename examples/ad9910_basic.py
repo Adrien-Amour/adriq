@@ -1,9 +1,9 @@
 import tkinter as tk
 from tkinter import ttk
-from itcm.ad9910 import *
+from adriq.ad9910 import *
 import time
 import serial.tools.list_ports
-from itcm.Custom_Tkinter import CustomSpinbox, CustomIntSpinbox
+from adriq.Custom_Tkinter import CustomSpinbox, CustomIntSpinbox
 import threading
 
 # Global flag to control scanning

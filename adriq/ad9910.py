@@ -524,7 +524,7 @@ def general_setting_master(Port, Board):
     #    - Slave: False
 
     cfr1_wbytes = cfr1_bytes(
-    RAM_Enable=False, RAM_Mode='00', Inverse_Sinc_Filter_Enable=False, Internal_Profile='0000', Sin=False,
+    RAM_Enable=False, RAM_Mode='00', Inverse_Sinc_Filter_Enable=True, Internal_Profile='0000', Sin=False,
     Manual_OSK_External_Control=False,
     Autoclear_Digital_Ramp_Accumulator=False, Autoclear_Phase_Accumulator=False,
     Clear_Digital_Ramp_Accumulator=False, Clear_Phase_Accumulator=False,
@@ -704,7 +704,7 @@ def interpolate_rf_power(calibration_file, Max_RF_Power, frac, output_frequency)
 
         if rf_power_frac > 1:
             raise ValueError("RF Output too high")
-    return rf_power_frac * Max_RF_Power, Optical_Power_Output
+    return int(rf_power_frac * Max_RF_Power), Optical_Power_Output
 
 class Laser:
     PLL_MULTIPLIER = 40

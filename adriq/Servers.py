@@ -1,6 +1,8 @@
 import socket
 import threading
 import pickle
+import time
+import atexit
 
 class Server:
     def __init__(self, service_class, max_que):
@@ -10,6 +12,9 @@ class Server:
         self.service_socket.listen(max_que)
         self.running = True
         print(f"Server listening on port {self.service_instance.port}...")
+        
+        # Register the close method to be called at exit
+        atexit.register(self.shutdown)
 
     def listen(self):
         while self.running:
@@ -47,11 +52,12 @@ class Server:
             client_socket.close()
 
     def shutdown(self):
-        self.running = False
-        self.service_socket.close()
-        print("Server has been shut down.")
-        self.service_instance.close()
-        del self.service_instance
+        if self.running:
+            self.running = False
+            self.service_socket.close()
+            print("Server has been shut down.")
+            self.service_instance.close()
+            del self.service_instance
 
     @classmethod
     def status_check(cls, service_class, max_que):
@@ -70,23 +76,44 @@ class Server:
         
     @classmethod
     def master(cls, service_class, max_que):
-        # This closes any existing iteration of the server and creates a new one, returning the associated iteration of the class
         try:
-            # Attempt to connect to the server to check if it's running
             client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             client.connect((service_class.host, service_class.port))
-            
-            # If connected, send SHUTDOWN command to the existing server
             client.sendall(pickle.dumps("SHUTDOWN"))
             client.close()
-            
-            # Wait a moment to ensure the server shuts down
             time.sleep(1)
-            
         except ConnectionRefusedError:
             print("Server is not running.")
         
         print("Starting new server...")
-        service_instance = cls(service_class, max_que)  # Start a new server instance
-        threading.Thread(target=service_instance.listen, daemon=True).start()
-        return service_instance
+        server_instance = cls(service_class, max_que)
+        threading.Thread(target=server_instance.listen, daemon=True).start()
+        return server_instance.service_instance  # Return the service instance
+
+class Client:
+    def __init__(self, service_class):
+        self.service_class = service_class
+        self.host = service_class.host
+        self.port = service_class.port
+
+    def send_command(self, command):
+        try:
+            client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            client_socket.connect((self.host, self.port))
+            
+            # Serialize the command using pickle
+            client_socket.sendall(pickle.dumps(command))
+            
+            # Receive the response from the server
+            response_data = client_socket.recv(4096)  # Adjust buffer size as needed
+            response = pickle.loads(response_data)
+            
+            client_socket.close()
+            return response
+        except ConnectionRefusedError:
+            print("Server is not running. Attempting to restart...")
+            Server.status_check(self.service_class, 5)
+            time.sleep(1)  # Wait a moment to ensure the server starts
+            return self.send_command(command)  # Retry sending the command
+        except Exception as e:
+            print(f"Error sending command: {e}")

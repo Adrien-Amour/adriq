@@ -1,14 +1,15 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from .ad9910 import *
-from .pulse_sequencer import *
-from .Counters import *
-from .tdc_functions import filter_trailing_zeros, compute_time_diffs
-from .Servers import Server
+from adriq.ad9910 import *
+from adriq.pulse_sequencer import *
+from adriq.Counters import *
+import adriq.QuTau as QuTau
+import numpy as np
+from adriq.tdc_functions import filter_trailing_zeros, compute_time_diffs
+from adriq.Servers import Server
 import nidaqmx
 import time
 import keyboard
-from tqdm import tqdm
 
 
 
@@ -45,7 +46,7 @@ class DDS_Ram:
         self.pulse_sequencer_pin = pulse_sequencer_pin
         self.calibration_file = calibration_file
         self.max_rf_power = max_rf_power
-        self.frequency = (200 + detuning / 2)  ##convert detuning (in MHz) to DDS output (in MHz). All ad9910 functions are in MHz
+        self.frequency = (200 - detuning / 2)  ##convert detuning (in MHz) to DDS output (in MHz). All ad9910 functions are in MHz
         self.phase = 0
         self.amplitude_array = None #array containing the fractional optical power values for ram playback
         self.flashed = False
@@ -97,9 +98,12 @@ class DDS_Ram:
             Phase=self.phase,
             Show_RAM=False
         )
+        print(type(self.amplitude_array), type(self.amplitude_array[0]))
         start_ram(self.port, self.board) # because of firmware we have to start ram to actually flash the DDS
         # Set profile 0 to direct switch mode (start = 0, stop = 1)
+        time.sleep(3)
         ram_profile_setting(self.port, self.board, 0, Start_Address=1, End_Address=1, Profile_Mode="Direct Switch")
+        time.sleep(3)
         # Set profile 1 to playback mode (start = 1, stop = 1000)
         ram_profile_setting(self.port, self.board, 1, Amplitude_Ramp_Rate_Divider=int(ramp_rate_divider), Start_Address=2, End_Address=len(self.amplitude_array)-1, Profile_Mode="Ramp-Up", No_Dwell_High=True)
     
@@ -153,32 +157,25 @@ class Experiment_Runner:
         # Calibrate run time on the first run
         self.calibrate_run_time()
         
-        try:
-            while self.running:
-                if N is not None and iteration >= N:
-                    print("Reached the maximum number of iterations. Stopping experiment.")
-                    self.qutau_reader.exit_experiment_mode()
-                    break
+        while self.running:
+            if N is not None and iteration >= N:
+                print("Reached the maximum number of iterations. Stopping experiment.")
+                break
 
-                self.start_pulse_sequencer()
-                iteration += 1
+            self.start_pulse_sequencer()
+            iteration += 1
 
-                if keyboard.is_pressed('q'):
-                    print("Manual exit requested. Stopping experiment.")
-                    self.running = False
-                    self.qutau_reader.exit_experiment_mode()
-                    break
+            if keyboard.is_pressed('q'):
+                print("Manual exit requested. Stopping experiment.")
+                self.running = False
+                break
 
-                if keyboard.is_pressed('p'):
-                    print("Pause requested. Pausing experiment.")
-                    self.running = False
-                    self.pause_experiment()
-                    break
-        except KeyboardInterrupt:
-            print("Experiment interrupted. Exiting experiment mode.")
-            self.qutau_reader.exit_experiment_mode()
-            self.running = False
-    
+            if keyboard.is_pressed('p'):
+                print("Pause requested. Pausing experiment.")
+                self.running = False
+                self.pause_experiment()
+                break
+
     def calibrate_run_time(self):
         print(f"Calibrating run time for input to go HIGH on {self.channel_name} for up to {self.timeout} seconds...")
         control_pulse_sequencer("COM5", "Start")
@@ -298,86 +295,8 @@ class Experiment_Runner:
             if ch.active and ch.mode in ["signal-f", "signal-sp"]:
                 ch.discard_recent_time_diffs()
 
-    def plot_time_diffs_histogram(self, mode, lower_cutoff=None, upper_cutoff=None):
-        """
-        Plot histograms of the time_diffs attribute for all channels with the specified mode.
-        
-        Parameters:
-        mode (str): The mode of the channels to plot.
-        lower_cutoff (float, optional): The minimum time difference to include in the plot (in microseconds).
-        upper_cutoff (float, optional): The maximum time difference to include in the plot (in microseconds).
-        """
-        # Find all channels with the specified mode
-        channels = [ch for ch in self.qutau_reader.channels if ch.mode == mode]
-        if not channels:
-            print(f"No channels found with mode {mode}.")
-            return
-
-        # Plot histograms for each channel
-        for channel in channels:
-            time_diffs_us = np.array(channel.time_diffs) * 1E6  # Convert to NumPy array and multiply by 1E6
-            
-            # Apply lower cutoff if specified
-            if lower_cutoff is not None:
-                time_diffs_us = time_diffs_us[time_diffs_us >= lower_cutoff]
-            
-            # Apply upper cutoff if specified
-            if upper_cutoff is not None:
-                time_diffs_us = time_diffs_us[time_diffs_us <= upper_cutoff]
-            
-            plt.figure(figsize=(10, 6))
-            plt.hist(time_diffs_us, bins=50, edgecolor='black')
-            plt.title(f'Histogram of Time Differences for Channel {channel.name}')
-            plt.xlabel('Time Difference (μs)')
-            plt.ylabel('Frequency')
-            plt.grid(True)
-            plt.show()
-
-    def get_counts_in_window(self, mode, lower_cutoff=None, upper_cutoff=None):
-        """
-        Get the total number of counts within the specified window for all channels with the specified mode.
-        
-        Parameters:
-        mode (str): The mode of the channels to get counts for.
-        lower_cutoff (float, optional): The minimum time difference to include in the counts (in microseconds).
-        upper_cutoff (float, optional): The maximum time difference to include in the counts (in microseconds).
-        
-        Returns:
-        dict: A dictionary with channel names as keys and the total number of counts within the window as values.
-        """
-        # Find all channels with the specified mode
-        channels = [ch for ch in self.qutau_reader.channels if ch.mode == mode]
-        if not channels:
-            print(f"No channels found with mode {mode}.")
-            return {}
-
-        counts_in_window = {}
-
-        # Get counts for each channel
-        for channel in channels:
-            time_diffs_us = np.array(channel.time_diffs) * 1E6  # Convert to NumPy array and multiply by 1E6
-            
-            # Apply lower cutoff if specified
-            if lower_cutoff is not None:
-                time_diffs_us = time_diffs_us[time_diffs_us >= lower_cutoff]
-            
-            # Apply upper cutoff if specified
-            if upper_cutoff is not None:
-                time_diffs_us = time_diffs_us[time_diffs_us <= upper_cutoff]
-            
-            # Calculate the total number of counts within the window
-            counts_in_window[channel.name] = len(time_diffs_us)
-        
-        return counts_in_window
-    
-    def clear_channels(self):
-        """Clear all time differences for all channels."""
-        for ch in self.qutau_reader.channels:
-            ch.clear_time_diffs()
-
-
 class Experiment_Builder:
-    def __init__(self, dds_dictionary, ram_step=0.02, pulse_sequencer_port="COM5", N_Cycles=1E5, ps_end_pin=2, pmt_gate_pin=1, ps_sync_pin=0):
+    def __init__(self, dds_dictionary, ram_step=0.02, pulse_sequencer_port="COM5", N_Cycles=1E6, ps_end_pin=2, pmt_gate_pin=1, ps_sync_pin=0):
         if ram_step % 0.004 != 0:
             raise ValueError("ram_step must be a multiple of 0.004.")
 
@@ -579,7 +498,7 @@ class Experiment_Builder:
         plt.grid(True)
         plt.show()
 
-    def flash(self, Continuous=False):
+    def flash(self):
         """
         Calls the flash method of all DDS instances and writes to the pulse sequencer.
         Initializes each DDS before calling their flash method.
@@ -591,17 +510,12 @@ class Experiment_Builder:
             # Can identify the start as a detection event.
             if self.playback_sections[-1]['pmt_gate_high']:
                 raise ValueError("pmt_gate_pin and ps_sync_pin are the same. pmt_gate_pin cannot be HIGH in the last playback section.")
-        pulse_out(self.pulse_sequencer_port, self.end_pulse)
-        control_pulse_sequencer(self.pulse_sequencer_port, 'Stop')  # always stop pulse sequencer before a write operation
 
+        control_pulse_sequencer(self.pulse_sequencer_port, 'Stop')  # always stop pulse sequencer before a write operation
         # Initialize each DDS instance before flashing
-        dds_list = list(self.DDS_Dictionary.items())
-        with tqdm(total=len(dds_list), desc="Flashing DDS", unit="DDS") as pbar:
-            for dds_name, dds in dds_list:
-                pbar.set_description(f"Flashing {dds_name}")
-                dds.initialise()  # Ensure the DDS is initialized
-                dds.flash(self.ram_step)  # Then flash the DDS
-                pbar.update(1)
+        for dds in self.DDS_Dictionary.values():
+            dds.initialise()  # Ensure the DDS is initialized
+            dds.flash(self.ram_step)  # Then flash the DDS
 
         # Construct the pulses and lengths for the pulse sequencer
         pulses = [self.cooling_pulse]
@@ -615,6 +529,7 @@ class Experiment_Builder:
             pulses.append(pulse)
             pulse_lengths.append(section['duration'])
 
+
         # Debug prints for verification
         print(f"Pulses: {pulses}, End Pulse: {self.end_pulse}")
         print(f"Pulse Lengths: {pulse_lengths}")
@@ -624,10 +539,83 @@ class Experiment_Builder:
             Port=self.pulse_sequencer_port,  
             Pulses=pulses,
             Pulse_Lengths=pulse_lengths,
-            Continuous=Continuous,
+            Continuous=False,
             N_Cycles=self.N_Cycles,
             End_Pulse=self.end_pulse
         )
-                
-        # print("allowing ion to resettle...")
-        # input("Press Enter when the ion has resettled.")
+control_pulse_sequencer("COM5", 'Stop')
+# # Create the dictionary of DDS instances
+calib_directory = r"C:\Users\probe\OneDrive - University of Sussex\Desktop\Experiment Files and VIs\AOM calibration VI\Calibration_Files"
+
+dds_dict = {
+    # "master": DDS_Ram(
+    #     port="COM9",
+    #     board=0,
+    #     mode="master",
+    #     pulse_sequencer_pin=11,
+    #     detuning=0,
+    #     calibration_file=calib_directory + r"\866_calib.csv",
+    #     max_rf_power=7800
+    # ),
+    "test": DDS_Ram(
+        port="COM9",
+        board=6,
+        mode="standalone",
+        pulse_sequencer_pin=11,
+        detuning=0,
+        calibration_file=calib_directory + r"\866_calib.csv",
+        max_rf_power=7800
+    )
+}
+# Create the ExperimentalSequence object
+exp_sequence = Experiment_Builder(dds_dict)
+
+# Create the cooling section (cool for 6 useconds)
+# exp_sequence.create_cooling_section(length=6, amplitude_dict={"397c": 0.2, "854 SP1": 0.1, "850 SP1": 0.2})
+exp_sequence.create_cooling_section(length=6, amplitude_dict={"test": 0.2})
+
+
+# Create a Gaussian output function for DDS 397a
+def gaussian(amplitude, width, centre):
+    return lambda t: amplitude * np.exp(-((t - centre)**2) / (2 * width**2))
+
+
+# Create op section 
+exp_sequence.create_section(name="Optical Pumping", duration=8, dds_functions={
+    # "test": lambda t: 0,
+}, pmt_gate_high=True)
+
+exp_sequence.create_section(name="Pump out of D3/2", duration=2, dds_functions={
+    # "test": lambda t: 1,
+}, pmt_gate_high=True)
+
+exp_sequence.create_section(name="Single Photon", duration=10, dds_functions={
+    # "test": gaussian(0.1, 0.6, 5),
+}, pmt_gate_high=True)
+
+exp_sequence.build_ram_arrays()
+
+# Plot the amplitude arrays
+exp_sequence.plot_amplitude_arrays()
+exp_sequence.flash()
+
+
+time.sleep(2)
+print("starting...")
+control_pulse_sequencer("COM5", 'Start')
+time.sleep(20)
+control_pulse_sequencer("COM5", 'Stop')
+
+
+
+# # #needs some code to initialise 
+
+# exp_runner = Experiment_Runner(
+#     timeout=100,
+#     pmt_threshold=1,
+#     sp_threshold=None
+# )
+
+# exp_runner.start_experiment(N=10)
+
+

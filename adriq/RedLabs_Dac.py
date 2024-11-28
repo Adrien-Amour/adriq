@@ -24,7 +24,7 @@ from mcculw.structs import DaqDeviceDescriptor
 from mcculw.device_info import DaqDeviceInfo
 from .Custom_Tkinter import CustomSpinbox, CustomIntSpinbox
 from .Counters import sine_wave, MicromotionWindow
-from .Servers import Server
+from .Servers import Server, Client
 
 from adriq.pulse_sequencer import *
 
@@ -32,7 +32,7 @@ from adriq.pulse_sequencer import *
 #This is to avoid any potential errors with addressing long after initialisation
 #can be changed in the future but doesn't have a big effect as this is fast compared to what we want to do with the dac.
 Redlabs_Dac = 0
-v1_chan, v2_chan, v3_chan, v4_chan = 4, 3, 1, 2
+v1_chan, v2_chan, v3_chan, v4_chan = 1, 2, 3, 4
 Shutter_Pin = 0
 Oven_Pin = 1
 rf_atten_chan = 7
@@ -650,6 +650,7 @@ class LoadControlPanel(tk.Frame):
     def __init__(self, parent, Count_Reader, Threshold, Timeout, *args, **kwargs):
         super().__init__(parent, *args, **kwargs)
         self.Count_Reader = Count_Reader
+        self.client = Client(Count_Reader)  # Create a client instance
         
         # Initialize IntVars with initial values from arguments
         self.Threshold = tk.IntVar(value=Threshold)
@@ -782,11 +783,7 @@ class LoadControlPanel(tk.Frame):
 
         # Start the timer
         start_time = time.time()
-        client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        client_socket.connect((self.Count_Reader.host, self.Count_Reader.port))
-        client_socket.sendall(pickle.dumps("GET_RATE"))
-        response_data = client_socket.recv(4096)
-        rate = pickle.loads(response_data) if response_data else 0.5
+        rate = self.client.send_command("GET_RATE") or 0.5
         try:
             while self.loading:
                 # Check for timeout
@@ -796,15 +793,13 @@ class LoadControlPanel(tk.Frame):
                     break  # Completed due to timeout
 
                 # Request counts from the server
-                client_socket.sendall(pickle.dumps("GET_COUNTS"))
-                response_data = client_socket.recv(4096)
-                counts = pickle.loads(response_data) if response_data else None
+                counts = self.client.send_command("GET_COUNTS")
                 # Handle the counts received
                 if counts and isinstance(counts, tuple) and len(counts) == 2:
                     times, count_values = counts
                     
                     # Get the last 5 values (or fewer if there are not enough)
-                    recent_counts = count_values[-5:]  # Get the last 5 count values
+                    recent_counts = list(count_values.values())[-5:]  # Get the last 5 count values
                     
                     # Flatten the list of lists and convert to integers
                     flattened_counts = [item for sublist in recent_counts for item in sublist]  # Flattening
@@ -818,7 +813,7 @@ class LoadControlPanel(tk.Frame):
                         break  # Exceeded the threshold
 
                 # Sleep for a duration based on the Count_Reader's rate
-                time.sleep(1 / rate if self.Count_Reader else 1)
+                time.sleep(1 / rate)
 
         except Exception as e:
             print(f"Error occurred while getting counts: {e}")
@@ -828,7 +823,6 @@ class LoadControlPanel(tk.Frame):
             reset_pins()
             self.stop_load()
             self.start_button.config(text="Start", command=self.start_load)
-            client_socket.close()  # Close the socket connection
 
     def reset_pins(self):
         """Ensure the pins are reset to 0."""

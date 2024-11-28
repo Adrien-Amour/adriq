@@ -6,7 +6,7 @@ from PyQt5.QtCore import QTimer
 import sys
 if __name__ == "__main__":
     Server.status_check(PMT_Reader, max_que=5)
-    Server.status_check(QuTau_Reader, max_que=5)
+    # Server.status_check(QuTau_Reader, max_que=5)
     
     app = QApplication(sys.argv)
     main_window = QMainWindow()
@@ -18,16 +18,16 @@ if __name__ == "__main__":
 
     # Create the plotters
     plotter1 = LivePlotter(PMT_Reader)
-    plotter2 = LivePlotter(QuTau_Reader)
+    # plotter2 = LivePlotter(QuTau_Reader)
 # 
     # Set fixed square size for each plotter
     square_size = 400  # Define the desired square size
     plotter1.setFixedSize(square_size, square_size)
-    plotter2.setFixedSize(square_size, square_size)
+    # plotter2.setFixedSize(square_size, square_size)
 
     # Add plotters to the layout
     layout.addWidget(plotter1)
-    layout.addWidget(plotter2)
+    # layout.addWidget(plotter2)
 
     # Set layout to the central widget
     central_widget.setLayout(layout)

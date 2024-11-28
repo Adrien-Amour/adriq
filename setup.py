@@ -1,4 +1,14 @@
-from setuptools import setup, find_packages
+from setuptools import setup, find_packages, Extension
+from Cython.Build import cythonize
+import numpy as np
+
+extensions = [
+    Extension(
+        "adriq.tdc_functions",
+        ["adriq/tdc_functions.pyx"],
+        include_dirs=[np.get_include()]
+    )
+]
 
 setup(
     name='adriq',
@@ -11,6 +21,7 @@ setup(
     install_requires=[
         # List any dependencies here
     ],
+    ext_modules=cythonize(extensions),
     author='Adrien Amour',
     author_email='a.amour@sussex.ac.uk',
     description='A description of your package',
