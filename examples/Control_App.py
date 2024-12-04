@@ -18,11 +18,11 @@ class ControlApp(tk.Tk):
         self.geometry("600x1200")  # Adjusted width to accommodate both panels
 
         # Initialize LoadControlPanel with correct parameters
-        self.load_control_panel = LoadControlPanel(self, PMT_Reader, Threshold=2000, Timeout=100)
+        self.load_control_panel = LoadControlPanel(self, PMT_Reader, Redlabs_DAC, Threshold=2000, Timeout=100)
         self.load_control_panel.place(x=0, y=460, anchor="nw", width=580, height=380)  # Adjust coordinates and size as needed
 
         # Initialize TrapControlFrame with correct parameters
-        self.trap_control_frame = TrapControlFrame(self, QuTau_Reader, default_h=-1.34, default_v=-0.553, default_trap_depth=0.8)
+        self.trap_control_frame = TrapControlFrame(self, QuTau_Reader, Redlabs_DAC, default_h=-1.34, default_v=-0.553, default_trap_depth=0.8)
         self.trap_control_frame.place(x=300, y=470, anchor="nw", width=580, height=380)  # Adjust coordinates and size as needed
 
         self.pulse_sequencer_frame = PulseSequencerFrame(self, defaultbitstring="0100000000000000", pulse_sequencer_port="COM5")

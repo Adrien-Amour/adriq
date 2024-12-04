@@ -1,14 +1,14 @@
 from adriq.RedLabs_Dac import *
-
+from adriq.Servers import *
 import tkinter as tk
 from tkinter import ttk
-
+redlabs_dac_client = Client(Redlabs_DAC)
 # Function to apply the voltage to the specified channel
 def apply_voltage():
     try:
         channel = int(channel_var.get())
         voltage = float(voltage_var.get())
-        write_analog_voltage(channel, voltage)
+        redlabs_dac_client.write_analog_voltage(channel, voltage)
     except ValueError as e:
         print(f"Invalid input: {e}")
 

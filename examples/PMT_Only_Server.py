@@ -5,7 +5,6 @@ from PyQt5.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget, QLa
 from PyQt5.QtCore import QTimer
 import sys
 if __name__ == "__main__":
-    Server.status_check(PMT_Reader, max_que=5)
     # Server.status_check(QuTau_Reader, max_que=5)
     
     app = QApplication(sys.argv)

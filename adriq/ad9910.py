@@ -370,6 +370,7 @@ def ram_profile_bytes(
 
     return [byte1, byte2, byte3, byte4, byte5, byte6, byte7, byte8], Temporal_Step_Size
 
+
 def ram_word_bytes(Array, Mode="Amplitude", PLL_Multiplier=40):
     #function to obtain RAM control words for all modulation modes modulation from input array containing desired frequencies
     Array = np.round(Array).astype(int)#intify
@@ -602,6 +603,20 @@ def single_tone_profile_setting(Port, Board, Profile, PLL_Multiplier=40, Amplitu
     else:
         raise ValueError("Profile must be an integer between 0 and 7")
 
+def set_ram_frequency(Port, Board, Frequency, Verbose=False):
+    PLL_Multiplier = 40
+    FTW_Bytes, _ = ftw_bytes(PLL_Multiplier=PLL_Multiplier, Frequency=Frequency)
+    write_to_ad9910(Port, 'FTW', Board, FTW_Bytes, Verbose=Verbose)
+
+def set_ram_phase(Port, Board, Phase, Verbose=False):
+    POW_Bytes, _ = pow_bytes(Phase)
+    write_to_ad9910(Port, 'POW', Board, POW_Bytes, Verbose=Verbose)
+
+def set_ram_amplitude(Port, Board, Amplitude, Verbose=False):
+    PLL_Multiplier = 40
+    ASF_Bytes, _ = asf_bytes(PLL_Multiplier=PLL_Multiplier, Amplitude=Amplitude, Amplitude_Ramp_Rate_Divider=0)
+    write_to_ad9910(Port, 'ASF', Board, ASF_Bytes, Verbose=Verbose)
+
 def write_ram(Port, Board, Mode, Array, Frequency=None, Amplitude=None, Phase=None, PLL_Multiplier=40, Show_RAM=False, Verbose=False):
     # # Print all arguments except Array on one line
     # print(f"Port: {Port}, Board: {Board}, Mode: {Mode}, Frequency: {Frequency}, Amplitude: {Amplitude}, Phase: {Phase}, PLL_Multiplier: {PLL_Multiplier}, Show_RAM: {Show_RAM}, Verbose: {Verbose}")
@@ -626,18 +641,15 @@ def write_ram(Port, Board, Mode, Array, Frequency=None, Amplitude=None, Phase=No
         plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
         plt.tight_layout()
         plt.show()
-    # Validate input lengths and value
+        # Validate input lengths and value
     if Frequency is not None:
-        FTW_Bytes, _ = ftw_bytes(PLL_Multiplier=PLL_Multiplier, Frequency=Frequency)
-        write_to_ad9910(Port, 'FTW', Board, FTW_Bytes, Verbose=Verbose)
+        set_ram_frequency(Port, Board, Frequency, Verbose=Verbose)
     if Phase is not None:
-        POW_Bytes,_ = pow_bytes(Phase)
-        write_to_ad9910(Port, 'POW', Board, POW_Bytes, Verbose=Verbose)
+        set_ram_phase(Port, Board, Phase, Verbose=Verbose)
     if Amplitude is not None:
-        ASF_Bytes, _ = asf_bytes(PLL_Multiplier=PLL_Multiplier, Amplitude=Amplitude, Amplitude_Ramp_Rate_Divider=0)
-        write_to_ad9910(Port, 'ASF', Board, ASF_Bytes, Verbose=Verbose)
-    byte1 = (length >> 8) & 0xFF  # Most significant byte
-    byte2 = length & 0xFF         # Least significant byte
+        set_ram_amplitude(Port, Board, Amplitude, Verbose=Verbose)
+        byte1 = (length >> 8) & 0xFF  # Most significant byte
+        byte2 = length & 0xFF         # Least significant byte
     
     for profile in range(8):
             Board_byte = Board & 0x07  # Ensure the board number is within the range 0-7

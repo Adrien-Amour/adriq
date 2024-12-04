@@ -28,156 +28,139 @@ from .Servers import Server, Client
 
 from adriq.pulse_sequencer import *
 
-#at the moment i initialise the dac every time it is addressed
-#This is to avoid any potential errors with addressing long after initialisation
-#can be changed in the future but doesn't have a big effect as this is fast compared to what we want to do with the dac.
-Redlabs_Dac = 0
-v1_chan, v2_chan, v3_chan, v4_chan = 1, 2, 3, 4
-Shutter_Pin = 0
-Oven_Pin = 1
-rf_atten_chan = 7
-daq_dev_info = DaqDeviceInfo(Redlabs_Dac)
-ao_info = daq_dev_info.get_ao_info()
-ao_range = ao_info.supported_ranges[0]
-dio_info = daq_dev_info.get_dio_info()
+
+class Redlabs_DAC:
+    host = "localhost"
+    port = 8002
+    def __init__(self, device_id=0, v1_chan=1, v2_chan=2, v3_chan=3, v4_chan=4, rf_atten_chan=7, 
+                 shutter_pin=0, oven_pin=1):
+        """
+        Initializes the RedlabsDAC class with the given device ID and optional pin assignments.
+
+        Args:
+        - device_id (int): The ID of the Redlabs DAC device (default is 0).
+        - v1_chan, v2_chan, v3_chan, v4_chan (int): Pin numbers for the analog output channels (default 1-4).
+        - rf_atten_chan (int): Pin number for the RF attenuation (default 7).
+        - shutter_pin, oven_pin (int): Pin numbers for digital channels (default 0 and 1).
+        """
+        self.device_id = device_id
+        self.daq_dev_info = DaqDeviceInfo(device_id)
+        self.ao_info = self.daq_dev_info.get_ao_info()
+        self.dio_info = self.daq_dev_info.get_dio_info()
+        self.ao_range = self.ao_info.supported_ranges[0]  # Assuming first supported range
+        # Analog channels (can be changed by arguments)
+        self.v1_chan = v1_chan
+        self.v2_chan = v2_chan
+        self.v3_chan = v3_chan
+        self.v4_chan = v4_chan
+        self.rf_atten_chan = rf_atten_chan
+        # Digital channels (can be changed by arguments)
+        self.shutter_pin = shutter_pin
+        self.oven_pin = oven_pin
+        Redlabs_DIO_Port = self.dio_info.port_info[self.device_id]
+        
+        if Redlabs_DIO_Port.is_port_configurable:
+            ul.d_config_port(self.device_id, Redlabs_DIO_Port.type, DigitalIODirection.OUT)
+
+        self.reset_pins()
+
+    def __del__(self):
+        """Destructor method to reset pins when the instance is destroyed."""
+        self.reset_pins()
+
+    def write_analog_voltage(self, channel, voltage):
+        """Writes the specified voltage to the specified analog channel."""
+        print(f"Writing {voltage} V to channel {channel}")
+        raw_value = ul.from_eng_units(self.device_id, self.ao_range, voltage)
+        try:
+            ul.a_out(self.device_id, channel, self.ao_range, raw_value)
+        except ULError as e:
+            self.show_ul_error(e)
+
+    def dc_min_shift(self, H, V, Q=0, S=0):
+        """
+        Calculate V_i based on provided values and write to corresponding channels.
+        In this function, we use the values described in Nicholas Seymour Smith's thesis.
+        Parameters:
+        - H: Value for H = (V_1 + V_4) - (V_2 + V_3)
+        - V: Value for V = (V_1 + V_2) - (V_3 + V_4)
+        - Q: Value for Q = (V_1 + V_3) - (V_2 + V_4) (default 0)
+        - S: Value for S = (V_1 + V_2) - (V_3 + V_4) (default 0)
+
+        Returns:
+        - Tuple containing V_1, V_2, V_3, and V_4.
+        """
+        # Calculate the voltages for the channels
+        V_1 = (H + V + Q + S) / 4
+        V_2 = (V + S - H - Q) / 4
+        V_3 = (Q + S - H - V) / 4
+        V_4 = (H + S - V - Q) / 4
+        
+        # Write to analog channels
+        self.write_analog_voltage(self.v1_chan, V_1)
+        self.write_analog_voltage(self.v2_chan, V_2)
+        self.write_analog_voltage(self.v3_chan, V_3)
+        self.write_analog_voltage(self.v4_chan, V_4)
+
+        return V_1, V_2, V_3, V_4
+
+    def set_digital_pin(self, pin, value):
+        """
+        Sets the specified digital pin high or low.
+
+        Args:
+        - pin (int): The digital pin to set.
+        - value (int): 1 to set high, 0 to set low.
+        """
+        try:
+            ul.d_bit_out(self.device_id, self.dio_info.port_info[0].type, pin, value)
+            print(f"Set pin {pin} to {'HIGH' if value else 'LOW'}")
+        except ULError as e:
+            self.show_ul_error(e)
 
 
-def write_analog_voltage(Channel, Voltage):
-    print(f"Writing {Voltage} V to channel {Channel}")
-    raw_value = ul.from_eng_units(Redlabs_Dac, ao_range, Voltage)
-    try:
-        ul.a_out(Redlabs_Dac, Channel, ao_range, raw_value)
-    except ULError as e:
-        show_ul_error(e)
-  
-def dc_min_shift(H, V, Q=0, S=0):
-    """
-    Calculate V_i based on the provided values.
- 
-    Parameters:
-    - H: Value for H = (V_1 + V_4) - (V_2 + V_3)
-    - V: Value for V = (V_1 + V_2) - (V_3 + V_4)
-    - Q: Value for Q = (V_1 + V_3) - (V_2 + V_4) (default is 0)
-    - S: Value for S = (V_1 + V_2) - (V_3 + V_4) (default is 0)
- 
-    Returns:
-    - Tuple containing V_1, V_2, V_3, and V_4.
-    """
- 
-    # Calculate V_2, V_3, and V_4 using the provided formulas
-    V_1 = (H + V + Q + S) / 4
-    V_2 = (V + S - H - Q) / 4
-    V_3 = (Q + S - H - V) / 4
-    V_4 = (H + S - V - Q) / 4
-    write_analog_voltage(v1_chan, V_1)
-    write_analog_voltage(v2_chan, V_2)
-    write_analog_voltage(v3_chan, V_3)
-    write_analog_voltage(v4_chan, V_4)
-    # print(V_1, V_2, V_3, V_4)
-    return V_1, V_2, V_3, V_4
+    def set_trap_depth(self, attenuation_voltage):
+        """Sets the trap depth (attenuation voltage) on the rf_atten_chan."""
+        if np.abs(attenuation_voltage) > 3:
+            raise ValueError("Attenuation voltage is out of range. Must be between -3 and 3.")
+        else:
+            self.write_analog_voltage(self.rf_atten_chan, attenuation_voltage)
 
-def scan_dc_min_shift(H_range, V_range, count_manager, threshold, no_runs, rate, no_bins, timeout=10):
-    amplitudes = np.zeros((len(H_range), len(V_range)))
-    retries = 2
+    def show_ul_error(self, error):
+        """Handles error reporting."""
+        print(f"UL Error: {error}")
 
-    for i, H in enumerate(H_range):
-        for j, V in enumerate(V_range):
-            success = False
-            for attempt in range(retries):
-                dc_min_shift(H, V)
-                amplitude, frequency, phase, N = count_manager.RF_correlation(no_runs, rate, no_bins)
-                if N > threshold:
-                    amplitudes[i, j] = amplitude
-                    success = True
-                    break
-                else:
-                    print(f"Attempt {attempt + 1} failed for H={H}, V={V}. Retrying...")
-            if not success:
-                print(f"Failed to get valid data for H={H}, V={V} after {retries} attempts.")
-                break
-
-    # Create a 3D plot of the amplitude for H and V
-    H_grid, V_grid = np.meshgrid(H_range, V_range)
-    fig = plt.figure()
-    ax = fig.add_subplot(111, projection='3d')
-    ax.plot_surface(H_grid, V_grid, amplitudes.T, cmap='viridis')
-    ax.set_xlabel('H')
-    ax.set_ylabel('V')
-    ax.set_zlabel('Amplitude')
-    ax.set_title('Amplitude for H and V')
-    plt.show()
-
-def set_trap_depth(attenuation_voltage):
-    # Check if the absolute value of attenuation_voltage is greater than 2
-    if np.abs(attenuation_voltage) > 3:
-        raise ValueError("Attenuation voltage is out of range. Must be between -2 and 2.")
-    else:
-        # If within range, call the write_analog_voltage function
-        write_analog_voltage(rf_atten_chan, attenuation_voltage)
-
-def load(Count_Manager, Threshold, Timeout):
-    port_number = 0 
-    Redlabs_DIO_Port = dio_info.port_info[port_number]
+    def start_oven(self):
+        """Turns on the oven by setting the oven pin high."""
+        self.set_digital_pin(self.oven_pin, 1)
     
-    if Redlabs_DIO_Port.is_port_configurable:
-        ul.d_config_port(Redlabs_Dac, Redlabs_DIO_Port.type, DigitalIODirection.OUT)
+    def open_pi_shutter(self):
+        """Opens the PI shutter by setting the shutter pin high."""
+        self.set_digital_pin(self.shutter_pin, 1)
 
-    def reset_pins():
-        """Ensure the pins are reset to 0 when exiting."""
-        ul.d_bit_out(Redlabs_Dac, Redlabs_DIO_Port.type, Shutter_Pin, 0)
-        ul.d_bit_out(Redlabs_Dac, Redlabs_DIO_Port.type, Oven_Pin, 0)
-
-    # Register the reset function to be called upon normal exit or an exception
-    atexit.register(reset_pins)
-
-    # Set the pins to high
-    ul.d_bit_out(Redlabs_Dac, Redlabs_DIO_Port.type, Shutter_Pin, 1)
-    ul.d_bit_out(Redlabs_Dac, Redlabs_DIO_Port.type, Oven_Pin, 1)
-
-    # Ensure counting is true
-    if not Count_Manager.counting:
-        Count_Manager.counting = True
-
-    # Start the timer
-    start_time = time.time()
+    def get_device_info(self):
+        """Returns information about the device."""
+        return {
+            "Device ID": self.device_id,
+            "Analog Output Range": self.ao_range,
+            "Digital IO Info": self.dio_info
+        }
     
-    try:
-        while True:
-            # Check for timeout
-            elapsed_time = time.time() - start_time
-            if elapsed_time > Timeout:
-                print("Timeout reached")
-                return True  # Completed due to timeout
-
-            # Check if there are enough counts
-            count_len = len(Count_Manager.counts)
-            if count_len > 0:
-                # Determine the number of counts to average
-                num_counts = min(count_len, 5)
-                recent_counts = Count_Manager.counts[-num_counts:]
-
-                # Flatten the list if it's a list of lists with single elements
-                flattened_counts = [item[0] for item in recent_counts]
-
-                # Calculate the average
-                average_count = sum(flattened_counts) / len(flattened_counts)
-                
-                # Check if the average exceeds the threshold
-                if average_count > Threshold:
-                    print("Threshold exceeded")
-                    return False  # Exceeded the threshold
-
-            # Sleep for a duration based on the Count_Manager's rate
-            time.sleep(1 / Count_Manager.rate)
-    
-    finally:
-        # Ensure pins are reset
-        reset_pins()
+    def reset_pins(self):
+        """
+        Resets all relevant pins to LOW (0) for safety.
+        Oven pin high is bad news.
+        """
+        self.set_digital_pin(self.shutter_pin, 0)
+        self.set_digital_pin(self.oven_pin, 0)
+        print("All pins reset to LOW")
 
 class TrapControlFrame(tk.Frame):
-    def __init__(self, master=None, Count_Reader=None, default_h=0, default_v=0, default_trap_depth=0):
+    def __init__(self, master, tdc_reader, redlabs_dac, default_h=0, default_v=0, default_trap_depth=0):
         super().__init__(master)
         self.master = master
+        self.tdc_client = Client(tdc_reader)
+        self.redlabs_dac_client = Client(redlabs_dac)
         self.grid(padx=10, pady=10)
         self.create_widgets(default_h, default_v, default_trap_depth)
         self.scan_thread = None
@@ -187,7 +170,6 @@ class TrapControlFrame(tk.Frame):
         self.scan_window = None
         self.scan_hv_window = None
         self.micromotion_window = None
-        self.Count_Reader = Count_Reader
         self.ax = None  # Initialize ax to None
 
     def create_widgets(self, default_h, default_v, default_trap_depth):
@@ -222,9 +204,6 @@ class TrapControlFrame(tk.Frame):
         self.micromotion_button = tk.Button(static_frame, text="Single Micromotion Fit", command=self.open_micromotion_window)
         self.micromotion_button.grid(row=5, column=0, columnspan=2, padx=5, pady=10)
 
-        self.scan_hv_button = tk.Button(static_frame, text="Scan H and V", command=self.open_scan_hv_window)
-        self.scan_hv_button.grid(row=6, column=0, columnspan=2, padx=5, pady=10)
-
         self.configure(bg="#f0f0f0")
         static_frame.configure(bg="#f0f0f0")
     
@@ -244,7 +223,7 @@ class TrapControlFrame(tk.Frame):
             print("Cannot open Single Micromotion Fit window while H and V scan window is open.")
             return
 
-        self.micromotion_window = MicromotionWindow(self, self.Count_Reader)
+        self.micromotion_window = MicromotionWindow(self, self.tdc_client)
         if self.micromotion_window is not None and tk.Toplevel.winfo_exists(self.micromotion_window.micromotion_window):
             self.micromotion_window.micromotion_window.lift()
             return
@@ -257,15 +236,11 @@ class TrapControlFrame(tk.Frame):
             print("Cannot open Single Micromotion Fit window while H and V scan window is open.")
             return
 
-        self.micromotion_window = MicromotionWindow(self, self.Count_Reader)
-
-    def update_progress_bar(self, value):
-        self.progress_bar["value"] = value
-        self.micromotion_window.update_idletasks()
+        self.micromotion_window = MicromotionWindow(self, self.tdc_client)
 
     def update_trap_depth(self, value):
         # Update the trap depth voltage directly
-        set_trap_depth(value)
+        self.redlabs_dac_client.set_trap_depth(value)
 
     def display_vi_values(self, v1, v2, v3, v4):
         # Display the V_i values in the Text widget
@@ -374,7 +349,7 @@ class TrapControlFrame(tk.Frame):
 
         # Get the current voltage
         voltage = self.voltages[self.current_index]
-        set_trap_depth(voltage)
+        self.redlabs_dac_client.set_trap_depth(voltage)
         self.spinbox_trap_depth.set(voltage)  # Update trap depth input value
 
         # Update the index for the next step
@@ -395,278 +370,42 @@ class TrapControlFrame(tk.Frame):
             print("Stopping scan...")
         else:
             print("No scan to stop.")
-
-    def open_scan_hv_window(self):
-        if self.scan_hv_window is not None and tk.Toplevel.winfo_exists(self.scan_hv_window):
-            self.scan_hv_window.lift()
-            return
-
-        if self.scan_window is not None and tk.Toplevel.winfo_exists(self.scan_window):
-            print("Cannot open H/V scan window while Trap Depth scan window is open.")
-            return
-
-        if self.micromotion_window is not None and self.micromotion_window.micromotion_window is not None and tk.Toplevel.winfo_exists(self.micromotion_window.micromotion_window):
-            print("Cannot open scan H/V window while micromotion window is open.")
-            return
-
-        self.scan_hv_window = tk.Toplevel(self)
-        self.scan_hv_window.title("Scan H and V")
-        self.scan_hv_window.protocol("WM_DELETE_WINDOW", self.close_scan_hv_window)
-
-        scan_hv_frame = tk.Frame(self.scan_hv_window, relief=tk.RAISED, borderwidth=2)
-        scan_hv_frame.grid(row=0, column=0, padx=10, pady=10, sticky="n")
-
-        # H inputs
-        self.label_h_start = tk.Label(scan_hv_frame, text="H Start:")
-        self.label_h_start.grid(row=0, column=0, sticky="e", padx=5, pady=5)
-        self.entry_h_start = CustomSpinbox(scan_hv_frame, from_=-5.0, to=5.0, increment=0.1)
-        self.entry_h_start.grid(row=0, column=1, padx=5, pady=5)
-
-        self.label_h_end = tk.Label(scan_hv_frame, text="H End:")
-        self.label_h_end.grid(row=0, column=2, sticky="e", padx=5, pady=5)
-        self.entry_h_end = CustomSpinbox(scan_hv_frame, from_=-5.0, to=5.0, increment=0.1)
-        self.entry_h_end.grid(row=0, column=3, padx=5, pady=5)
-
-        self.label_h_points = tk.Label(scan_hv_frame, text="H Points:")
-        self.label_h_points.grid(row=0, column=4, sticky="e", padx=5, pady=5)
-        self.entry_h_points = CustomIntSpinbox(scan_hv_frame, from_=1, to=100)
-        self.entry_h_points.grid(row=0, column=5, padx=5, pady=5)
-
-        # V inputs
-        self.label_v_start = tk.Label(scan_hv_frame, text="V Start:")
-        self.label_v_start.grid(row=1, column=0, sticky="e", padx=5, pady=5)
-        self.entry_v_start = CustomSpinbox(scan_hv_frame, from_=-5.0, to=5.0, increment=0.1)
-        self.entry_v_start.grid(row=1, column=1, padx=5, pady=5)
-
-        self.label_v_end = tk.Label(scan_hv_frame, text="V End:")
-        self.label_v_end.grid(row=1, column=2, sticky="e", padx=5, pady=5)
-        self.entry_v_end = CustomSpinbox(scan_hv_frame, from_=-5.0, to=5.0, increment=0.1)
-        self.entry_v_end.grid(row=1, column=3, padx=5, pady=5)
-
-        self.label_v_points = tk.Label(scan_hv_frame, text="V Points:")
-        self.label_v_points.grid(row=1, column=4, sticky="e", padx=5, pady=5)
-        self.entry_v_points = CustomIntSpinbox(scan_hv_frame, from_=1, to=100)
-        self.entry_v_points.grid(row=1, column=5, padx=5, pady=5)
-
-        # Additional inputs
-        self.label_threshold = tk.Label(scan_hv_frame, text="Threshold:")
-        self.label_threshold.grid(row=2, column=0, sticky="e", padx=5, pady=5)
-        self.entry_threshold = CustomIntSpinbox(scan_hv_frame, from_=0, to=10000)
-        self.entry_threshold.grid(row=2, column=1, padx=5, pady=5)
-
-        self.label_no_runs = tk.Label(scan_hv_frame, text="Number of Runs:")
-        self.label_no_runs.grid(row=2, column=2, sticky="e", padx=5, pady=5)
-        self.entry_no_runs = CustomIntSpinbox(scan_hv_frame, from_=1, to=100)
-        self.entry_no_runs.grid(row=2, column=3, padx=5, pady=5)
-
-        self.label_rate = tk.Label(scan_hv_frame, text="Rate:")
-        self.label_rate.grid(row=2, column=4, sticky="e", padx=5, pady=5)
-        self.entry_rate = CustomSpinbox(scan_hv_frame, from_=0.1, to=100.0, increment=0.1)
-        self.entry_rate.grid(row=2, column=5, padx=5, pady=5)
-
-        self.start_scan_hv_button = tk.Button(scan_hv_frame, text="Start", command=self.start_scan_hv_thread)
-        self.start_scan_hv_button.grid(row=3, column=0, columnspan=6, padx=5, pady=10)
-
-        self.scan_hv_window.configure(bg="#f0f0f0")
-        scan_hv_frame.configure(bg="#f0f0f0")
-
-        # Add output boxes for minimal amplitude and corresponding H and V values
-        self.label_min_amplitude = tk.Label(scan_hv_frame, text="Min Amplitude:")
-        self.label_min_amplitude.grid(row=4, column=0, sticky="e", padx=5, pady=5)
-        self.entry_min_amplitude = tk.Entry(scan_hv_frame, state='readonly', relief=tk.SUNKEN, bg='#f0f0f0')
-        self.entry_min_amplitude.grid(row=4, column=1, padx=5, pady=5)
-
-        self.label_min_h = tk.Label(scan_hv_frame, text="Min H:")
-        self.label_min_h.grid(row=4, column=2, sticky="e", padx=5, pady=5)
-        self.entry_min_h = tk.Entry(scan_hv_frame, state='readonly', relief=tk.SUNKEN, bg='#f0f0f0')
-        self.entry_min_h.grid(row=4, column=3, padx=5, pady=5)
-
-        self.label_min_v = tk.Label(scan_hv_frame, text="Min V:")
-        self.label_min_v.grid(row=4, column=4, sticky="e", padx=5, pady=5)
-        self.entry_min_v = tk.Entry(scan_hv_frame, state='readonly', relief=tk.SUNKEN, bg='#f0f0f0')
-        self.entry_min_v.grid(row=4, column=5, padx=5, pady=5)
-
-        # Add matplotlib plots
-        self.fig_hv = Figure(figsize=(5, 4), dpi=100)
-        self.ax_hv = self.fig_hv.add_subplot(111)
-        self.canvas_hv = FigureCanvasTkAgg(self.fig_hv, master=self.scan_hv_window)
-        self.canvas_hv.draw()
-        self.canvas_hv.get_tk_widget().grid(row=5, column=0, columnspan=6, padx=5, pady=5)
-
-        self.fig_fit = Figure(figsize=(5, 4), dpi=100)
-        self.ax_fit = self.fig_fit.add_subplot(111)
-        self.canvas_fit = FigureCanvasTkAgg(self.fig_fit, master=self.scan_hv_window)
-        self.canvas_fit.draw()
-        self.canvas_fit.get_tk_widget().grid(row=5, column=6, columnspan=6, padx=5, pady=5)
-
-        # Add output boxes for fit parameters m and c
-        self.label_m = tk.Label(scan_hv_frame, text="Slope (m):")
-        self.label_m.grid(row=6, column=0, sticky="e", padx=5, pady=5)
-        self.entry_m = tk.Entry(scan_hv_frame, state='readonly', relief=tk.SUNKEN, bg='#f0f0f0')
-        self.entry_m.grid(row=6, column=1, padx=5, pady=5)
-
-        self.label_c = tk.Label(scan_hv_frame, text="Intercept (c):")
-        self.label_c.grid(row=6, column=2, sticky="e", padx=5, pady=5)
-        self.entry_c = tk.Entry(scan_hv_frame, state='readonly', relief=tk.SUNKEN, bg='#f0f0f0')
-        self.entry_c.grid(row=6, column=3, padx=5, pady=5)
-
-    def start_scan_hv_thread(self):
-        if self.scan_thread and self.scan_thread.is_alive():
-            print("Scan already in progress.")
-            return
-
-        self.scanning = True
-        self.scan_thread = threading.Thread(target=self.start_scan_hv)
-        self.scan_thread.start()
-
-    def start_scan_hv(self):
-        try:
-            h_start = float(self.entry_h_start.get())
-            h_end = float(self.entry_h_end.get())
-            h_points = int(self.entry_h_points.get())
-            v_start = float(self.entry_v_start.get())
-            v_end = float(self.entry_v_end.get())
-            v_points = int(self.entry_v_points.get())
-            threshold = int(self.entry_threshold.get())
-            no_runs = int(self.entry_no_runs.get())
-            rate = float(self.entry_rate.get())
-        except ValueError:
-            print("Invalid input, please enter valid numbers.")
-            return
-
-        h_values = np.linspace(h_start, h_end, h_points)
-        v_values = np.linspace(v_start, v_end, v_points)
-        amplitudes = np.full((h_points, v_points), np.nan)  # Initialize with NaN
-
-        for i, h in enumerate(h_values):
-            for j, v in enumerate(v_values):
-                dc_min_shift(h, v)
-                total_counts = 0
-                retries = 0
-                while total_counts < threshold and retries < 3:
-                    try:
-                        popt, hist, bin_edges = self.Count_Reader.RF_correlation(no_runs, rate, v_points)
-                        total_counts = np.sum(hist)
-                        if total_counts >= threshold:
-                            amplitudes[i, j] = popt[0]  # Store the amplitude from popt
-                            print("H:",h," V:", v, " A:", popt[0], " f:", popt[1])
-                            break
-                    except RuntimeError as e:
-                        print(f"Error fitting sine wave at H={h}, V={v}: {e}")
-                    retries += 1
-                if total_counts < threshold and retries >= 3:
-                    if not messagebox.askyesno("Continue?", f"Total counts below threshold at H={h}, V={v}. Continue?"):
-                        print("Scan aborted by user.")
-                        return
-
-        # Ensure ax_hv is initialized
-        if self.ax_hv is None:
-            print("Error: ax_hv is not initialized.")
-            return
-
-        # Update 2D histogram plot
-        self.ax_hv.clear()
-        h_mesh, v_mesh = np.meshgrid(h_values, v_values)
-        c = self.ax_hv.pcolormesh(h_mesh, v_mesh, amplitudes.T, shading='auto')
-        self.fig_hv.colorbar(c, ax=self.ax_hv)
-        self.ax_hv.set_xlabel('H')
-        self.ax_hv.set_ylabel('V')
-        self.canvas_hv.draw()
-
-        # Find minimal amplitude and corresponding H and V values
-        min_amplitudes = np.nanmin(np.abs(amplitudes), axis=1)
-        min_v_indices = np.nanargmin(amplitudes, axis=1)
-        min_v_values = v_values[min_v_indices]
-
-        # Perform linear fit
-        fit_params = np.polyfit(h_values, min_v_values, 1)
-        m, c = fit_params
-
-        # Ensure ax_fit is initialized
-        if self.ax_fit is None:
-            print("Error: ax_fit is not initialized.")
-            return
-
-        # Update linear fit plot
-        self.ax_fit.clear()
-        self.ax_fit.plot(h_values, min_v_values, 'o', label='Min V values')
-        self.ax_fit.plot(h_values, m * h_values + c, '-', label=f'Fit: V = {m:.3f}H + {c:.3f}')
-        self.ax_fit.set_xlabel('H')
-        self.ax_fit.set_ylabel('V')
-        self.ax_fit.legend()
-        self.canvas_fit.draw()
-
-        # Update output boxes
-        self.entry_min_amplitude.config(state='normal')
-        self.entry_min_amplitude.delete(0, tk.END)
-        self.entry_min_amplitude.insert(0, f"{np.nanmin(min_amplitudes):.3f}")
-        self.entry_min_amplitude.config(state='readonly')
-
-        self.entry_min_h.config(state='normal')
-        self.entry_min_h.delete(0, tk.END)
-        self.entry_min_h.insert(0, f"{h_values[np.nanargmin(min_amplitudes)]:.3f}")
-        self.entry_min_h.config(state='readonly')
-
-        self.entry_min_v.config(state='normal')
-        self.entry_min_v.delete(0, tk.END)
-        self.entry_min_v.insert(0, f"{min_v_values[np.nanargmin(min_amplitudes)]:.3f}")
-        self.entry_min_v.config(state='readonly')
-
-        self.entry_m.config(state='normal')
-        self.entry_m.delete(0, tk.END)
-        self.entry_m.insert(0, f"{m:.3f}")
-        self.entry_m.config(state='readonly')
-
-        self.entry_c.config(state='normal')
-        self.entry_c.delete(0, tk.END)
-        self.entry_c.insert(0, f"{c:.3f}")
-        self.entry_c.config(state='readonly')
-
-    def stop_scan_hv(self):
-        self.scanning = False
-        if self.scan_thread and self.scan_thread.is_alive():
-            print("Stopping scan...")
-        else:
-            print("No scan to stop.")
-
-    def close_scan_hv_window(self):
-        self.stop_scan_hv()
-        self.scan_hv_window.destroy()
-        self.scan_hv_window = None
     
     def update_H(self, value):
         # Call dc_min_shift function with updated H and current V value
         current_V = float(self.spinbox_V.get())
-        v1, v2, v3, v4 = dc_min_shift(value, current_V)
+        v1, v2, v3, v4 = self.redlabs_dac_client.dc_min_shift(value, current_V)
         self.display_vi_values(v1, v2, v3, v4)
 
     def update_V(self, value):
         # Call dc_min_shift function with updated V and current H value
         current_H = float(self.spinbox_H.get())
-        v1, v2, v3, v4 = dc_min_shift(current_H, value)
+        v1, v2, v3, v4 = self.redlabs_dac_client.dc_min_shift(current_H, value)
         self.display_vi_values(v1, v2, v3, v4)
 
 class LoadControlPanel(tk.Frame):
-    def __init__(self, parent, Count_Reader, Threshold, Timeout, *args, **kwargs):
+    def __init__(self, parent, PMT_Reader, Redlabs_DAC, Threshold, Timeout, *args, **kwargs):
         super().__init__(parent, *args, **kwargs)
-        self.Count_Reader = Count_Reader
-        self.client = Client(Count_Reader)  # Create a client instance
-        
+
+        # Initialize clients for PMT_Reader and RedlabsDAC
+        self.pmt_reader_client = Client(PMT_Reader)
+        self.redlabs_dac_client = Client(Redlabs_DAC)
+
         # Initialize IntVars with initial values from arguments
         self.Threshold = tk.IntVar(value=Threshold)
         self.Timeout = tk.IntVar(value=Timeout)
         self.remaining_time = tk.IntVar(value=0)  # Assuming remaining time starts at 0
-        
+
         # Flag to control loading
         self.loading = False
-        
+
         # GUI setup
         self.configure(padx=10, pady=10)
 
         # Create a raised frame to hold all widgets
         self.control_frame = tk.Frame(self, relief=tk.RAISED, borderwidth=2)
         self.control_frame.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
-        
+
         # Create widgets inside the raised frame
         self.create_widgets()
 
@@ -691,65 +430,49 @@ class LoadControlPanel(tk.Frame):
         self.start_button.grid(row=3, columnspan=2, padx=10, pady=10)
 
     def start_load(self):
-        # Check the server status
-        server_status = Server.status_check(self.Count_Reader, 1)
-        if server_status == 0:
-            print("Server was not running. Starting server for Ion loading.")
-            self.server_started = True  # Mark that the server has been started
-        else:
-            self.server_started = False  # Server was already running
-        print("sending command")
-        # Send a command to check if counting is active
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
-            client_socket.connect((self.Count_Reader.host, self.Count_Reader.port))
-            client_socket.sendall(pickle.dumps("GET_COUNTING"))
-            print("command sent")
-            # Receive response and check if counting is active
-            self.was_counting = pickle.loads(client_socket.recv(4096))
-            
-            # Check if counting is not active
-            if not self.was_counting:
-                print("PMT_Reader is not counting. Starting counting...")
-                client_socket.sendall(pickle.dumps("START_COUNTING"))
-                response = pickle.loads(client_socket.recv(4096))  # You can check the response if needed
-        client_socket.close()
-        # Disable the start button to prevent multiple starts
-        self.start_button.config(text="Stop", command=self.stop_load)
+        # Start the RedlabsDAC ports configuration
+        try:
+            self.redlabs_dac_client.start_oven()
+            self.redlabs_dac_client.open_pi_shutter()
+        except Exception as e:
+            print(f"Failed to initialize digital pins: {e}")
+            return
 
-        # Start the countdown timer in a separate thread
+        # Start the PMT_Reader server if not already running
+        try:
+            counting_status = self.pmt_reader_client.get_counting()
+            if not counting_status:
+                print("PMT_Reader is not counting. Starting counting...")
+                self.pmt_reader_client.start_counting()
+        except Exception as e:
+            print(f"Failed to communicate with PMT_Reader: {e}")
+            return
+
+        # Start the countdown and load function in separate threads
         self.loading = True
         self.remaining_time.set(self.Timeout.get())
-        print("starting load")
         threading.Thread(target=self.countdown, daemon=True).start()
-
-        # Start the load function in a separate thread
         threading.Thread(target=self.load_function, daemon=True).start()
 
+        # Update UI
+        self.start_button.config(text="Stop", command=self.stop_load)
+
     def stop_load(self):
-        # Reset pins and update the UI button
-        self.reset_pins()
-        self.start_button.config(text="Start", command=self.start_load)
+        # Reset the DAC pins
+        try:
+            self.redlabs_dac_client.reset_pins()
+        except Exception as e:
+            print(f"Failed to reset DAC pins: {e}")
+
+        # Stop the PMT counting if it was started by this session
+        try:
+            a = 0
+            #self.pmt_reader_client.stop_counting()
+        except Exception as e:
+            print(f"Failed to stop PMT_Reader counting: {e}")
+
         self.loading = False
-
-        # Check if it was counting and stop counting if true
-        if not self.was_counting:
-            print("Stopping counting...")
-            stop_counting_command = "STOP_COUNTING"
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
-                client_socket.connect((self.Count_Reader.host, self.Count_Reader.port))
-                client_socket.sendall(pickle.dumps(stop_counting_command))
-                response = pickle.loads(client_socket.recv(4096))  # Check response if necessary
-                if response:
-                    print("Counting has been stopped successfully.")
-
-        # Check if the server was started in start_load
-        if self.server_started:
-            print("Shutting down the server...")
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
-                client_socket.connect((self.Count_Reader.host, self.Count_Reader.port))
-                client_socket.sendall(pickle.dumps("SHUTDOWN"))
-                # Optional: receive a response here if needed
-                response = pickle.loads(client_socket.recv(4096))  # Optional: check if needed
+        self.start_button.config(text="Start", command=self.start_load)
 
     def countdown(self):
         timeout = self.Timeout.get()
@@ -757,76 +480,30 @@ class LoadControlPanel(tk.Frame):
             time.sleep(1)
             timeout -= 1
             self.remaining_time.set(timeout)
-        
+
         # Stop the load function if the countdown completes
-        self.loading = False
-        # Re-enable the start button when the countdown is done
-        self.start_button.config(text="Start", command=self.start_load)
+        self.stop_load()
 
     def load_function(self):
-        port_number = 0 
-        Redlabs_DIO_Port = dio_info.port_info[port_number]
-        
-        if Redlabs_DIO_Port.is_port_configurable:
-            ul.d_config_port(Redlabs_Dac, Redlabs_DIO_Port.type, DigitalIODirection.OUT)
-
-        def reset_pins():
-            """Ensure the pins are reset to 0 when exiting."""
-            ul.d_bit_out(Redlabs_Dac, Redlabs_DIO_Port.type, Shutter_Pin, 0)
-            ul.d_bit_out(Redlabs_Dac, Redlabs_DIO_Port.type, Oven_Pin, 0)
-
-        # Register the reset function to be called upon normal exit or an exception
-        atexit.register(reset_pins)
-        # Set the pins to high
-        ul.d_bit_out(Redlabs_Dac, Redlabs_DIO_Port.type, Shutter_Pin, 1)
-        ul.d_bit_out(Redlabs_Dac, Redlabs_DIO_Port.type, Oven_Pin, 1)
-
-        # Start the timer
-        start_time = time.time()
-        rate = self.client.send_command("GET_RATE") or 0.5
+        rate = self.pmt_reader_client.get_rate()
         try:
             while self.loading:
-                # Check for timeout
-                elapsed_time = time.time() - start_time
-                if elapsed_time > self.Timeout.get():
-                    print("Timeout reached")
-                    break  # Completed due to timeout
-
-                # Request counts from the server
-                counts = self.client.send_command("GET_COUNTS")
-                # Handle the counts received
-                if counts and isinstance(counts, tuple) and len(counts) == 2:
-                    times, count_values = counts
-                    
-                    # Get the last 5 values (or fewer if there are not enough)
-                    recent_counts = list(count_values.values())[-5:]  # Get the last 5 count values
-                    
-                    # Flatten the list of lists and convert to integers
-                    flattened_counts = [item for sublist in recent_counts for item in sublist]  # Flattening
-                                        
-                    # Calculate the average from the flattened counts
-                    average_count = sum(flattened_counts) / len(flattened_counts) if flattened_counts else 0
-                    
-                    # Check if the average exceeds the threshold
-                    if average_count > self.Threshold.get():
+                # Get counts from the PMT_Reader
+                counts = self.pmt_reader_client.get_counts()
+                if counts:
+                    # Check the average of recent counts
+                    counts = counts[1]['PMT']
+                    recent_counts = counts[-3:]  # Assuming counts is a list of values
+                    avg_counts = sum(recent_counts) / len(recent_counts) if recent_counts else 0
+                    if avg_counts > self.Threshold.get():
                         print("Threshold exceeded")
-                        break  # Exceeded the threshold
+                        break
 
-                # Sleep for a duration based on the Count_Reader's rate
+                # Sleep based on PMT_Reader's rate
                 time.sleep(1 / rate)
 
         except Exception as e:
-            print(f"Error occurred while getting counts: {e}")
+            print(f"Error during load function: {e}")
 
         finally:
-            # Ensure pins are reset
-            reset_pins()
             self.stop_load()
-            self.start_button.config(text="Start", command=self.start_load)
-
-    def reset_pins(self):
-        """Ensure the pins are reset to 0."""
-        port_number = 0 
-        Redlabs_DIO_Port = dio_info.port_info[port_number]
-        ul.d_bit_out(Redlabs_Dac, Redlabs_DIO_Port.type, Shutter_Pin, 0)
-        ul.d_bit_out(Redlabs_Dac, Redlabs_DIO_Port.type, Oven_Pin, 0)

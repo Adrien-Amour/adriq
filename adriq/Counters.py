@@ -70,6 +70,9 @@ class PMT_Reader:
 
     def get_N(self):
         return self.N
+    
+    def get_counting(self): # Return the current counting status
+        return self.counting
 
     def count_rate(self):
         start_time = time.time()  # Record the start time
@@ -110,31 +113,6 @@ class PMT_Reader:
     def get_counts(self):
         with self.lock:  # Ensure thread-safe access
             return self.times, {"PMT": self.counts}
-    
-    def recv_command(self, command):
-        if command == "GET_COUNTING":
-            return self.counting
-        if command == "START_COUNTING":
-            self.start_counting()
-            return True
-        elif command == "STOP_COUNTING":
-            self.stop_counting()
-            return True
-        if command == "GET_COUNTS":
-            counts = self.get_counts()
-            return counts
-        elif command == "GET_RATE":
-            return self.get_rate()
-        elif command == "GET_N":
-            return self.get_N()
-        elif command.startswith("SET_RATE"):
-            _, new_rate = command.split()
-            return self.update_rate(int(new_rate))
-        elif command.startswith("SET_N"):
-            _, new_N = command.split()
-            return self.update_N(int(new_N))
-        else:
-            return "Unknown command"
 
     def close(self):
         self.stop_counting()  # Ensure counting is stopped
@@ -168,10 +146,8 @@ class QuTau_Channel:
         self.time_diffs = []
 
 class QuTau_Reader:
-
     host = 'localhost'
     port = 8001  # Set a unique port number for QuTau_Reader
-
     def __init__(self, channels=None):
         if channels is None:
             channels = [
@@ -228,7 +204,11 @@ class QuTau_Reader:
     def enter_rf_correlation_mode(self):
         self.current_mode = "rf_correlation"
         self.set_active_channels(["signal-f", "trap"])
-
+    
+    def exit_rf_correlation_mode(self):
+        self.current_mode = "idle"
+        self.set_active_channels([])
+    
     def enter_experiment_mode(self, experiment_config=None):
         self.current_mode = "experiment"
         
@@ -368,7 +348,7 @@ class QuTau_Reader:
         self.N = new_N
         return True
 
-    def RF_correlation(self, no_runs, rate, no_bins, update_progress_callback=None):
+    def RF_correlation(self, no_runs, rate, no_bins):
         if self.current_mode == "experiment":
             print("RF correlation cannot be performed in experiment mode.")
             return [], [], []
@@ -391,7 +371,6 @@ class QuTau_Reader:
             self.get_data()
             start_time2 = time.time()
             trap_drive_chan = next(ch.number for ch in self.channels if ch.mode == "trap")
-            print(trap_drive_chan)
             signal_chans = np.array([ch.number for ch in self.channels if ch.mode in ["signal-f"]], dtype=np.int64)
             time_diffs_run = compute_time_diffs(self.tstamp, self.tchannel, trap_drive_chan, signal_chans)
             if time_diffs_run and len(time_diffs_run[0]) > 0:  # Check if time_diffs_run is not empty
@@ -401,11 +380,8 @@ class QuTau_Reader:
             sleep_time = max(0, (1 / self.rate) - elapsed_time)
             time.sleep(sleep_time)
 
-            # Send progress update to the client
-            if update_progress_callback:
-                percent_complete = (run + 1) / no_runs * 100
-                print(f'\rProgress: {percent_complete:.2f}%', end='', flush=True)
-        print(time_diffs)
+            percent_complete = (run + 1) / no_runs * 100
+            print(f'\rProgress: {percent_complete:.2f}%', end='', flush=True)
         if len(time_diffs) == 0:
             print("No time differences were computed.")
             self.active_channels = previous_channels
@@ -415,7 +391,6 @@ class QuTau_Reader:
             return [], [], []
 
         time_diffs = np.array(time_diffs, dtype=np.float64)
-        time_diffs *= self.timebase
 
         # Remove outliers using the IQR method
         if len(time_diffs) > 0:
@@ -470,39 +445,19 @@ class QuTau_Reader:
 
         if was_counting:
             self.start_counting()
-
         return popt, hist, bin_edges
 
-    def recv_command(self, command):
-        if command == "GET_COUNTING":
-            return self.current_mode == "counting"
-        elif command == "START_COUNTING":
-            self.start_counting()
-            return True
-        elif command == "STOP_COUNTING":
-            self.stop_counting()
-            return True
-        elif command == "GET_COUNTS":
-            counts = self.get_counts()
-            return counts
-        elif command == "GET_LAST_TIMESTAMPS":
-            timestamps = self.get_last_timestamps()
-            return timestamps
-        elif command == "GET_RATE":
-            return self.get_rate()
-        elif command == "GET_N":
-            return self.get_N()
-        elif command.startswith("SET_RATE"):
-            _, new_rate = command.split()
-            return self.update_rate(int(new_rate))
-        elif command.startswith("SET_N"):
-            _, new_N = command.split()
-            return self.update_N(int(new_N))
-        elif command.startswith("START_RF_CORRELATION"):
-            _, no_runs, rate, no_bins, *show_plot = command.split()
-            return self.RF_correlation(int(no_runs), int(rate), int(no_bins), bool(int(show_plot[0])) if show_plot else False)
-        else:
-            return "Unknown command"
+    def clear_channels(self):
+        for ch in self.channels:
+            ch.clear_time_diffs()
+
+    def save_recent_time_diffs(self):
+        for ch in self.channels:
+            ch.save_recent_time_diffs()
+    
+    def discard_recent_time_diffs(self):
+        for ch in self.channels:
+            ch.discard_recent_time_diffs()
         
     def close(self):
         if self.current_mode != "experiment":
@@ -510,18 +465,17 @@ class QuTau_Reader:
             print("QuTau_Reader has been closed.")
         else:
             print("Cannot close QuTau_Reader while in experiment mode.")
+    
 
 class MicromotionWindow:
-    def __init__(self, parent, count_reader):
+    def __init__(self, parent, count_reader_client):
         self.parent = parent
-        self.count_reader = count_reader
+        self.count_reader_client = count_reader_client
         self.micromotion_window = tk.Toplevel(parent)
         self.micromotion_window.title("Single Micromotion Fit")
         self.micromotion_window.protocol("WM_DELETE_WINDOW", self.close_window)
         self.micromotion_thread = None
         self.ax = None  # Initialize ax to None
-
-
 
         # Initialize previous fit parameters
         self.prev_amplitude = None
@@ -618,12 +572,6 @@ class MicromotionWindow:
         self.micromotion_thread.start()
 
     def start_rf_correlation(self):
-        # Check the status of the server
-        server_status = Server.status_check(self.count_reader, 1)
-
-        if server_status == 0:
-            print("Server was not running. Starting server for RF correlation.")
-
         try:
             no_runs = int(self.entry_no_runs.get())
             rate = float(self.entry_rate.get())
@@ -631,48 +579,8 @@ class MicromotionWindow:
         except ValueError:
             print("Invalid input, please enter valid numbers.")
             return
-
-        print("sending command")
-        # Send START_RF_CORRELATION command to the QuTau_Reader server
-        command = f"START_RF_CORRELATION {int(no_runs)} {int(rate)} {int(no_bins)} 1"
-        client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        client_socket.connect((self.count_reader.host, self.count_reader.port))
-        client_socket.sendall(pickle.dumps(command))
-
-        response = None  # Initialize response before the loop
-        while True:
-            response_data = client_socket.recv(4096)
-            if response_data:  # Ensure data was received
-                try:
-                    response = pickle.loads(response_data)
-                except (pickle.UnpicklingError, EOFError) as e:
-                    print(f"Error: Failed to decode response - {e}")
-                    client_socket.close()
-                    break
-                print(response)
-                # Case 1: Error message in the form of a string
-                if isinstance(response, str):
-                    if response == "Unknown command":
-                        print("Error: Unknown command received.")
-                        client_socket.close()
-                        break
-                    else:
-                        print(f"Message received: {response}")
-
-                # Case 2: Final data response as a tuple (fit parameters, histogram, and bin edges)
-                elif isinstance(response, tuple) and len(response) == 3:
-                    popt, hist, bin_edges = response
-                    print("Fit parameters:", popt)
-                    print("Histogram data:", hist)
-                    print("Bin edges:", bin_edges)
-                    break
-
-                # Case: Unhandled data type
-                else:
-                    print("Error: Unexpected response format received.")
-                    client_socket.close()
-                    break
-        client_socket.close()
+        
+        popt, hist, bin_edges = self.count_reader_client.RF_correlation(no_runs, rate, no_bins)
 
         # Ensure ax is initialized
         if self.ax is None:
@@ -767,17 +675,12 @@ class MicromotionWindow:
         self.prev_phase = popt[2]
         self.prev_offset = popt[3]
 
-        # If the server was not running before, shut it down
-        if server_status == 0:
-            # Add code to shut down the server if needed
-            pass
 
 class LivePlotter(QWidget):
     def __init__(self, count_reader):
         super().__init__()
-        self.count_reader = count_reader
-        self.client = Client(count_reader)
-        
+        self.count_reader_client = Client(count_reader)
+
         # Set up main layout
         self.layout = QVBoxLayout()
         self.setLayout(self.layout)
@@ -785,7 +688,7 @@ class LivePlotter(QWidget):
         # Plot widget setup
         self.plot_widget = pg.PlotWidget()
         self.plot_widget.setBackground('k')  # Dark background
-        self.plot_widget.showGrid(x=True, y=True, alpha=0.3)  # White grid lines with some transparency
+        self.plot_widget.showGrid(x=True, y=True, alpha=0.3)  # White grid lines with transparency
         self.plot_widget.setLabel('left', "Count Rate", units='Counts/s', color='w', size='20pt')
         self.plot_widget.setLabel('bottom', "Time", units='s', color='w', size='20pt')
         self.plot_widget.getAxis('left').tickFont = pg.QtGui.QFont('Arial', 14)
@@ -826,11 +729,6 @@ class LivePlotter(QWidget):
         self.pause_button.clicked.connect(self.toggle_pause)
         self.control_layout.addWidget(self.pause_button)
 
-        # Checkboxes for channels
-        self.checkbox_layout = QHBoxLayout()
-        self.checkboxes = []
-        self.layout.addLayout(self.checkbox_layout)
-
         # Timer and plotting data
         self.update_interval = 1000 // self.get_rate()  # Initial interval in ms
         self.timer = QTimer()
@@ -840,9 +738,13 @@ class LivePlotter(QWidget):
         self.times = []
         self.counts = []
         self.is_paused = False
-        self.is_counting = self.client.send_command("GET_COUNTING")
+        self.is_counting = self.count_reader_client.get_counting()
 
         # Initialize counting button state
+        self.update_count_button_state()
+
+    def update_count_button_state(self):
+        """Update the state of the counting button based on the server's counting status."""
         if self.is_counting:
             self.count_button.setText("Stop Counting")
             self.count_button.setStyleSheet("font-size: 16pt; padding: 10px 20px; background-color: red; color: white;")
@@ -852,22 +754,16 @@ class LivePlotter(QWidget):
 
     def set_rate(self, new_rate):
         """Send a command to set the new rate in the PMT_Reader."""
-        try:
-            command = f"SET_RATE {new_rate}"
-            response = self.client.send_command(command)
-            if response:
-                self.update_rate()  # Update the timer interval if the rate was successfully set
-        except Exception as e:
-            print(f"Error setting rate: {e}")
+        self.count_reader_client.update_rate(new_rate)
 
     def get_rate(self):
         """Retrieve the update rate from PMT_Reader."""
         try:
-            rate = self.client.send_command("GET_RATE")
+            rate = self.count_reader_client.get_rate()
             return rate
         except Exception as e:
             print(f"Error getting rate: {e}")
-            return 5  # Default rate if unable to fetch
+            return 10  # Default rate if unable to fetch
 
     def update_rate(self):
         """Update the timer interval based on the PMT_Reader's rate."""
@@ -888,70 +784,39 @@ class LivePlotter(QWidget):
             self.pause_button.setStyleSheet("font-size: 16pt; padding: 10px 20px; background-color: green; color: white;")
         self.is_paused = not self.is_paused
 
-    def start_counting(self):
-        """Send a command to start counting in the PMT_Reader."""
-        try:
-            self.client.send_command("START_COUNTING")
-            self.is_counting = True
-        except Exception as e:
-            print(f"Error starting counting: {e}")
-
-    def stop_counting(self):
-        """Send a command to stop counting in the PMT_Reader."""
-        try:
-            self.client.send_command("STOP_COUNTING")
-            self.is_counting = False
-        except Exception as e:
-            print(f"Error stopping counting: {e}")
-
     def toggle_counting(self):
         """Toggle counting on or off."""
         if self.is_counting:
-            self.stop_counting()
-            self.count_button.setText("Start Counting")
-            self.count_button.setStyleSheet("font-size: 16pt; padding: 10px 20px; background-color: green; color: white;")
+            self.count_reader_client.stop_counting()
         else:
-            self.start_counting()
-            self.count_button.setText("Stop Counting")
-            self.count_button.setStyleSheet("font-size: 16pt; padding: 10px 20px; background-color: red; color: white;")
+            self.count_reader_client.start_counting()
+
+        self.is_counting = not self.is_counting
+        self.update_count_button_state()
 
     def update_plot(self):
         """Update the plot with the latest counts."""
         try:
-            data = self.client.send_command("GET_COUNTS")
+            data = self.count_reader_client.get_counts()
 
             if not data:
                 print("No data received from server.")
                 return
 
-            # Extract times and counts from the data
             times, counts = data
             self.times = [time.timestamp() for time in times]
-            self.counts = counts
-
-            # Update checkboxes if not already created
-            if not self.checkboxes:
-                for channel_name in self.counts.keys():
-                    checkbox = QCheckBox(channel_name)
-                    checkbox.setChecked(True)
-                    checkbox.stateChanged.connect(self.update_plot)
-                    self.checkboxes.append(checkbox)
-                    self.checkbox_layout.addWidget(checkbox)
+            self.counts = counts["PMT"]  # Assuming a single "PMT" channel for simplicity
 
             # Update plot
             self.plot_widget.clear()
-            colors = ['w', 'r', 'g', 'b', 'y', 'c', 'm']  # List of colors for different lines
-            for i, (channel_name, count) in enumerate(self.counts.items()):
-                if self.checkboxes[i].isChecked():
-                    color = colors[i % len(colors)]
-                    self.plot_widget.plot(self.times, count, pen=pg.mkPen(color, width=1), name=channel_name)  # Line with different colors
+            self.plot_widget.plot(self.times, self.counts, pen=pg.mkPen('w', width=2))
 
+            # Update the current count rate label
             if self.counts:
-                current_rates = {channel: counts[-1] for channel, counts in self.counts.items()}
-                current_rates_str = ", ".join(f" {rate}" for _, rate in current_rates.items())
-                self.label.setText(f"Current Count Rates: {current_rates_str}")
+                current_rate = self.counts[-1]
+                self.label.setText(f"Current Count Rate: {current_rate} counts/s")
             else:
-                self.label.setText("Current Count Rates: N/A")
+                self.label.setText("Current Count Rate: N/A")
 
         except Exception as e:
             print(f"Error updating plot: {e}")
