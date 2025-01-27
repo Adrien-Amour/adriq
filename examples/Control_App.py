@@ -38,26 +38,26 @@ class ControlApp(tk.Tk):
 
 def create_laser_objects():
     """Creates laser objects based on the given configuration."""
-    calib_directory = r"C:\Users\probe\OneDrive - University of Sussex\Desktop\Experiment Files and VIs\AOM calibration VI\Calibration_Files"
+    calib_directory = r"C:\Users\probe\OneDrive - University of Sussex\Desktop\Experiment_Config\Calibration_Files"
     standalone_boards = "COM9"
     standalone_lasers = [
-        ("397a", 2, "397a_calib.csv", 2400),
-        ("397b", 0, "397b_calib.csv", 2900),
-        ("397c", 4, "397c_calib.csv", 1600),
-        ("866", 6, "866_calib.csv", 7800),
-        ("OP 866", 1, "854_rp_calib.csv", 10700),
-        ("854 Cav", 3, "854_rp_calib.csv", 4800),
-        ("RP 850", 5, "850_rp_calib.csv", 7450),
+        ("397a", 2, "397a_calib.csv"),
+        ("397b", 0, "397b_calib.csv"),
+        ("397c", 4, "397c_calib.csv"),
+        ("866", 6, "866S_calib.csv"),
+        ("OP 866", 1, "854_rp_calib.csv"),
+        ("854 Cav", 3, "854_rp_calib.csv"),
+        ("RP 850", 5, "850_rp_calib.csv"),
     ]
     
     lasers = []
-    for name, board, calib_file, max_rf_power in standalone_lasers:
-        laser = Laser(name, standalone_boards, "standalone", board, f"{calib_directory}\\{calib_file}", max_rf_power)
+    for name, board, calib_file in standalone_lasers:
+        laser = Laser(name, standalone_boards, "standalone", board, f"{calib_directory}\\{calib_file}")
         lasers.append(laser)
     
     phaselocked_boards = "COM10"
-    lasers.append(Laser("850 SP1", phaselocked_boards, "master", 0, f"{calib_directory}\\850_calib.csv", 15000))
-    lasers.append(Laser("854 SP1", phaselocked_boards, "slave", 2, f"{calib_directory}\\854_calib.csv", 15000))
+    lasers.append(Laser("850 SP1", phaselocked_boards, "master", 0, f"{calib_directory}\\850_calib.csv"))
+    lasers.append(Laser("854 SP1", phaselocked_boards, "slave", 2, f"{calib_directory}\\854_calib.csv"))
 
     return lasers
 

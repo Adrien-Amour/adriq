@@ -25,7 +25,7 @@ from PyQt5.QtWidgets import QSpinBox
 import pyqtgraph as pg
 from PyQt5.QtCore import QTimer
 from .Custom_Tkinter import CustomSpinbox, CustomIntSpinbox
-from .tdc_functions import filter_trailing_zeros, compute_time_diffs, count_channel_events
+from .tdc_functions import filter_trailing_zeros, compute_time_diffs, count_channel_events, filter_runs
 
 # Local application/library-specific imports
 from . import QuTau
@@ -257,26 +257,49 @@ class QuTau_Reader:
         self.tstamp, self.tchannel = filter_trailing_zeros(self.tstamp, self.tchannel)
         return self.tstamp, self.tchannel
 
-    def compute_time_diff(self):
+    def filter_runs_for_fluorescence(self, expected_fluorescence, pulse_window_time, bin_size=50000):
+        """
+        expected_fluorescence: Expected fluorescence rate while the pulse sequence is running
+        """
+        # Find the signal channel counting fluoresence
+        signal_chans = np.array(
+            [ch.number for ch in self.channels if ch.mode in ["signal-f"]],
+            dtype=np.int64
+        )
+        
+        # Check if any signal channel is found
+        if signal_chans.size == 0:
+            raise ValueError("No signal channels found with mode 'signal-f'.")
+        
+        # Assuming we use the first signal channel found
+        signal_chan = signal_chans[0]
         trigger_chan = next(ch.number for ch in self.channels if ch.mode == "trigger")
         
-        # Start timing
-        start_time = time.time()
+        print(pulse_window_time)
+        # Call the filter_runs function with self.tstamp and self.tchannel
+        self.tstamp, self.tchannel, valid_pulse_count, total_pulses = filter_runs(
+            tstamp=self.tstamp,
+            tchannel=self.tchannel,
+            trig_chan=trigger_chan,
+            signal_chan=signal_chan,
+            expected_count_rate=expected_fluorescence,
+            pulse_window_time=pulse_window_time,
+            bin_size=bin_size
+        )
+
+        return valid_pulse_count, total_pulses
+
+    def compute_time_diff(self, pulse_window_time=50E-6):
+
+        trigger_chan = next(ch.number for ch in self.channels if ch.mode == "trigger")
         
         signal_chans = np.array([ch.number for ch in self.channels if ch.mode in ["signal-f", "signal-sp"]], dtype=np.int64)
-        
-        # End timing
-        end_time = time.time()
-        
-        # Calculate elapsed time
-        elapsed_time = end_time - start_time
-        
-        time_diffs = compute_time_diffs(self.tstamp, self.tchannel, trigger_chan, signal_chans, sequence_length=26E-6)
+
+        time_diffs = compute_time_diffs(self.tstamp, self.tchannel, trigger_chan, signal_chans, pulse_window_time)
         # Store time differences in the corresponding channel objects
         for ch in self.channels:
             if ch.number in signal_chans:
                 ch.recent_time_diffs = time_diffs[signal_chans.tolist().index(ch.number)]
-                ch.time_diffs.extend(ch.recent_time_diffs)
 
     def start_counting(self):
         if self.current_mode in ["experiment", "rf_correlation"]:
@@ -376,10 +399,8 @@ class QuTau_Reader:
             if time_diffs_run and len(time_diffs_run[0]) > 0:  # Check if time_diffs_run is not empty
                 time_diffs.extend(time_diffs_run[0])  # Assuming single signal channel
             elapsed_time = time.time() - start_time
-
             sleep_time = max(0, (1 / self.rate) - elapsed_time)
             time.sleep(sleep_time)
-
             percent_complete = (run + 1) / no_runs * 100
             print(f'\rProgress: {percent_complete:.2f}%', end='', flush=True)
         if len(time_diffs) == 0:

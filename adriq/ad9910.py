@@ -674,15 +674,16 @@ def start_ram(Port, Board, Verbose=False):
     byte_array = bytearray([ord('s'), Board_byte, 0, 1] +  [0] *(60))
     send_byte_array_to_pic(Port, byte_array, Verbose)
 
-def interpolate_rf_power(calibration_file, Max_RF_Power, frac, output_frequency):
+def interpolate_rf_power(calibration_file, frac, output_frequency):
     if frac > 1:
         raise ValueError("RF Output too high")
-    if frac < 1E-4:
-        rf_power_frac, Optical_Power_Output = 0,0
+    if frac < 1E-5:
+        return 0,0
     else:
         # Load the calibration file
         data = np.loadtxt(calibration_file, delimiter=',', skiprows=0)
-
+        # Extract the Max_RF_Power from the first element
+        Max_RF_Power = data[0, 0]
         # Extract the columns
         frequency_col = data[1:, 0] / 2 #factor of two translates the frequency shift to DDS frequency (double pass)
         rf_power_fractions = data[0, 1:]  # Assumes the first row contains the fractions
@@ -722,7 +723,7 @@ class Laser:
     PLL_MULTIPLIER = 40
     VALID_MODES = {'master', 'slave', 'standalone'}
 
-    def __init__(self, name: str, port: str, mode: str, board: int, calibration_file: str, max_RF_power: int):
+    def __init__(self, name: str, port: str, mode: str, board: int, calibration_file: str):
         if mode not in self.VALID_MODES:
             raise ValueError(f"Invalid mode '{mode}' for laser {name}. Valid modes are: {', '.join(self.VALID_MODES)}")
         
@@ -731,7 +732,10 @@ class Laser:
         self.mode = mode
         self.board = board
         self.calibration_file = calibration_file
-        self.max_RF_power = max_RF_power
+        data = np.loadtxt(self.calibration_file, delimiter=',', skiprows=0)
+        # Extract the Max_RF_Power from the first element
+        Max_RF_Power = data[0, 0]
+        self.max_RF_power = Max_RF_Power
         self.amplitude = [0] * 8
         self.frequency = [200] * 8
         self.phase = [0] * 8
@@ -764,7 +768,7 @@ class Laser:
         if not (0 <= frac <= 1):
             raise ValueError("Fractional output power must be between 0 and 1.")
        
-        intended_amplitude, _ = interpolate_rf_power(self.calibration_file, self.max_RF_power, frac, frequency)
+        intended_amplitude, _ = interpolate_rf_power(self.calibration_file, frac, frequency)
         intended_amplitude = round(intended_amplitude)
  
         if self.on_state:

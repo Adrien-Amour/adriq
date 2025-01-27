@@ -1,9 +1,10 @@
 import numpy as np
 import matplotlib.pyplot as plt
+import sys
 from .ad9910 import *
 from .pulse_sequencer import *
 from .Counters import *
-from .tdc_functions import filter_trailing_zeros, compute_time_diffs
+from .tdc_functions import filter_trailing_zeros, compute_time_diffs, filter_runs
 from .Servers import Server
 from .RedLabs_Dac import Redlabs_DAC
 import nidaqmx
@@ -29,6 +30,8 @@ class DDS_Ram:
     The output from the associated pulse sequencer is stored in the `pulse_sequencer_pin` property of the class.
     The methods for initializing each DDS and flashing each one with its corresponding RAM array are defined within this class. 
     These RAM arrays should be constructed using methods from the Experiment class.
+    
+    the object also stores trapping frequency and amplitude values, which can be set using the set_trapping_parameters method.
 
     Parameters:
     port (str): The COM port used to program the DDS.
@@ -38,14 +41,16 @@ class DDS_Ram:
     frequency (float): The output frequency of the DDS.
     """
     PLL_Multiplier = 40  # Default PLL multiplier value
-    def __init__(self, port, board, mode, pulse_sequencer_pin, calibration_file: str, max_rf_power: int):
+    def __init__(self, port, board, mode, pulse_sequencer_pin, calibration_file: str):
         # Initialization as previously defined.
         self.port = port
         self.board = board
         self.mode = mode
         self.pulse_sequencer_pin = pulse_sequencer_pin
         self.calibration_file = calibration_file
-        self.max_rf_power = max_rf_power
+        data = np.loadtxt(self.calibration_file, delimiter=',', skiprows=0)
+        # Extract the Max_RF_Power from the first element
+
         self.frequency = 200
         self.trapping_frequency = None
         self.phase = 0
@@ -124,10 +129,73 @@ class DDS_Ram:
         
         ram_profile_setting(self.port, self.board, 0, Start_Address=2, End_Address=2, Profile_Mode="Direct Switch")
         
+class Pulse_Sequencer:
+    def __init__(self, port="COM5", ps_end_pin=2, pmt_gate_pin=1, ps_sync_pin=0):
+        """
+        Initializes the PulseSequencer instance.
+
+        Args:
+            port (str): Serial port for the pulse sequencer.
+            ps_end_pin (int): End pulse pin index.
+            pmt_gate_pin (int): PMT gate pin index.
+            ps_sync_pin (int): Sync pulse pin index.
+        """
+        self.port = port
+        self.ps_end_pin = ps_end_pin
+        self.pmt_gate_pin = pmt_gate_pin
+        self.ps_sync_pin = ps_sync_pin
+        
+        self.pulses = []  # Placeholder for pulse patterns
+        self.pulse_lengths = []  # Placeholder for pulse durations
+        self.N_Cycles = 1  # Default number of cycles
+        self.end_pulse = None  # Default end pulse
+        self.gated_fraction = 0  # Fraction of time PMT is gated
+
+    def start(self):
+        """
+        Starts the pulse sequencer.
+        """
+        control_pulse_sequencer(self.port, 'Start')
+
+    def stop(self):
+        """
+        Stops the pulse sequencer.
+        """
+        control_pulse_sequencer(self.port, 'Stop')
+
+    def write_sequence(self, Continuous=False):
+        """
+        Writes the pulse sequence to the pulse sequencer and calculates the gated fraction.
+        """
+        # Ensure pulse lengths are valid
+        if not self.pulses or not self.pulse_lengths or len(self.pulses) != len(self.pulse_lengths):
+            raise ValueError("Pulses and pulse lengths must be defined and of the same length.")
+
+        # Calculate the gated fraction
+        total_time = sum(self.pulse_lengths)
+        gated_time = sum(
+            length for pulse, length in zip(self.pulses, self.pulse_lengths) 
+            if pulse[self.pmt_gate_pin] == '1'
+        )
+
+        self.gated_fraction = gated_time / total_time if total_time > 0 else 0
+
+        self.sequence_length = total_time
+        print(f"Total time: {total_time:.6f} µs, Gated time: {gated_time:.6f} µs, Gated fraction: {self.gated_fraction:.2f}")
+        # Write the pulse sequence
+        write_pulse_sequencer(
+            Port=self.port,  
+            Pulses=self.pulses,
+            Pulse_Lengths=self.pulse_lengths,
+            Continuous=Continuous,
+            N_Cycles=self.N_Cycles,
+            End_Pulse=self.end_pulse
+        )
+
 
 
 class Experiment_Builder:
-    def __init__(self, dds_dictionary, ram_step=0.02, pulse_sequencer_port="COM5", N_Cycles=1E5, ps_end_pin=2, pmt_gate_pin=1, ps_sync_pin=0):
+    def __init__(self, dds_dictionary, pulse_sequencer, ram_step=0.02, N_Cycles=1E5):
         if ram_step % 0.004 != 0:
             raise ValueError("ram_step must be a multiple of 0.004.")
 
@@ -135,26 +203,25 @@ class Experiment_Builder:
         self.cooling_section = None
         self.playback_sections = []
         self.ram_step = ram_step
-        self.pulse_sequencer_port = pulse_sequencer_port
-        # Store pulse sequencer properties
-        self.pmt_gate_pin = pmt_gate_pin
-        self.ps_sync_pin = ps_sync_pin
-        self.ps_end_pin = ps_end_pin
+
+        self.pulse_sequencer = pulse_sequencer
+        self.pulse_sequencer.N_Cycles = int(N_Cycles)  # Number of cycles for the pulse sequencer to run after start is called
+
         self.N_Cycles = int(N_Cycles)  # Number of cycles for the pulse sequencer to run after start is called
         # Generate cooling pulse
         self.cooling_pulse = self._generate_pulse(state='cooling')
 
         # Check for pin conflicts
         dds_pins = {dds.pulse_sequencer_pin for dds in dds_dictionary.values()}
-        if pmt_gate_pin in dds_pins:
+        if self.pulse_sequencer.pmt_gate_pin in dds_pins:
             print("Warning: pmt_gate_pin overlaps with a DDS's pulse sequencer pin.")
-        if ps_sync_pin in dds_pins:
+        if self.pulse_sequencer.ps_sync_pin in dds_pins:
             print("Warning: ps_sync_pin overlaps with a DDS's pulse sequencer pin.")
-        if ps_end_pin in dds_pins:
+        if self.pulse_sequencer.ps_end_pin in dds_pins:
             raise ValueError("ps_end_pin must not overlap with any DDS's pulse sequencer pin.")
 
         # Generate end pulse
-        self.end_pulse = self._generate_pulse(state='end')
+        self.pulse_sequencer.end_pulse = self._generate_pulse(state='end')
         
     def _generate_pulse(self, state, pmt_gate_high=False):
         """
@@ -169,29 +236,29 @@ class Experiment_Builder:
         pulse = ['0'] * 16  # Start with all bits low
         
         if state == 'cooling':
-            pulse[self.pmt_gate_pin] = '1'  # gate pmt during cooling
-            pulse[self.ps_sync_pin] = '1'  # Set ps_sync_pin high for cooling to identify run start
+            pulse[self.pulse_sequencer.pmt_gate_pin] = '1'  # gate pmt during cooling
+            pulse[self.pulse_sequencer.ps_sync_pin] = '1'  # Set ps_sync_pin high for cooling to identify run start
         
-        elif state == 'playback' and self.pmt_gate_pin is not None and pmt_gate_high:
-            pulse[self.pmt_gate_pin] = '1'
+        elif state == 'playback' and self.pulse_sequencer.pmt_gate_pin is not None and pmt_gate_high:
+            pulse[self.pulse_sequencer.pmt_gate_pin] = '1'
 
         elif state == 'end':
-            pulse[self.pmt_gate_pin] = '1'  # gate pmt at end of sequence
-            pulse[self.ps_end_pin] = '1'
+            pulse[self.pulse_sequencer.pmt_gate_pin] = '1'  # gate pmt at end of sequence
+            pulse[self.pulse_sequencer.ps_end_pin] = '1'
 
         for dds in self.DDS_Dictionary.values():
             if state == 'cooling':
                 pulse[dds.pulse_sequencer_pin] = '0'  # Set DDS pins low for cooling
-                pulse[self.pmt_gate_pin] = '1'  # gate pmt during cooling
-                pulse[self.ps_sync_pin] = '1'  # Set ps_sync_pin high for cooling to identify run start
+                pulse[self.pulse_sequencer.pmt_gate_pin] = '1'  # gate pmt during cooling
+                pulse[self.pulse_sequencer.ps_sync_pin] = '1'  # Set ps_sync_pin high for cooling to identify run start
     
             elif state == 'playback':
                 pulse[dds.pulse_sequencer_pin] = '1'  # Set DDS pins high for playback
         
             elif state == 'end':
                 pulse[dds.pulse_sequencer_pin] = '0'  # Same as cooling, but with ps_end_pin high
-                pulse[self.pmt_gate_pin] = '1'  # gate pmt at end of sequence
-                pulse[self.ps_end_pin] = '1'
+                pulse[self.pulse_sequencer.pmt_gate_pin] = '1'  # gate pmt at end of sequence
+                pulse[self.pulse_sequencer.ps_end_pin] = '1'
 
         return ''.join(pulse)
 
@@ -234,7 +301,7 @@ class Experiment_Builder:
             # Check if pmt_gate_pin and ps_sync_pin are the same
             # we cannot switch between high and more than once, 
             # as we use each high signal from the sync to identify the run no. 
-            if self.pmt_gate_pin == self.ps_sync_pin:
+            if self.pulse_sequencer.pmt_gate_pin == self.pulse_sequencer.ps_sync_pin:
                 # Check this is not the first playback section
                 if self.playback_sections:
                     # Check the previous section's pmt_gate_high value
@@ -262,9 +329,9 @@ class Experiment_Builder:
 
         for key, dds in self.DDS_Dictionary.items():
             # Initialize amplitude array for this DDS
-            cooling_amplitude, _ = interpolate_rf_power(dds.calibration_file, dds.max_rf_power, self.cooling_section['amplitudes'][key], dds.frequency)
+            cooling_amplitude, _ = interpolate_rf_power(dds.calibration_file, self.cooling_section['amplitudes'][key], dds.frequency)
             if self.trapping_parameters['amplitudes'][key] is not None:
-                trapping_amplitude, _ = interpolate_rf_power(dds.calibration_file, dds.max_rf_power, self.trapping_parameters['amplitudes'][key], dds.trapping_frequency)
+                trapping_amplitude, _ = interpolate_rf_power(dds.calibration_file, self.trapping_parameters['amplitudes'][key], dds.trapping_frequency)
             else:
                 trapping_amplitude = cooling_amplitude  # Use cooling amplitude if trapping amplitude is not specified
             dds.amplitude_array = [trapping_amplitude, trapping_amplitude, cooling_amplitude]  # Initialize with trapping and cooling amplitudes
@@ -291,7 +358,7 @@ class Experiment_Builder:
                     section['functions'][key](t - current_time) for t in time_array
                 ]
                 amplitude_values = [
-                    interpolate_rf_power(dds.calibration_file, dds.max_rf_power, f, dds.frequency)[0]
+                    interpolate_rf_power(dds.calibration_file, f, dds.frequency)[0]
                     for f in fractional_power_array
                 ]
             
@@ -360,16 +427,16 @@ class Experiment_Builder:
         Calls the flash method of all DDS instances and writes to the pulse sequencer.
         Initializes each DDS before calling their flash method.
         """
-        if self.pmt_gate_pin == self.ps_sync_pin and self.playback_sections:
+        if self.pulse_sequencer.pmt_gate_pin == self.pulse_sequencer.ps_sync_pin and self.playback_sections:
             # Check if the last section's pmt_gate_high is True
             # This cant be the case if they share a pulse sequencer pin
             # we need it to go from LOW to HIGH at the start of each run, so that the QuTau
             # Can identify the start as a detection event.
             if self.playback_sections[-1]['pmt_gate_high']:
                 raise ValueError("pmt_gate_pin and ps_sync_pin are the same. pmt_gate_pin cannot be HIGH in the last playback section.")
-        pulse_out(self.pulse_sequencer_port, self.end_pulse)
-        control_pulse_sequencer(self.pulse_sequencer_port, 'Stop')  # always stop pulse sequencer before a write operation
-
+        control_pulse_sequencer(self.pulse_sequencer.port, 'Stop')  # always stop pulse sequencer before a write operation
+        pulse_out(self.pulse_sequencer.port, self.pulse_sequencer.end_pulse)
+        
         # Initialize each DDS instance before flashing
         dds_list = list(self.DDS_Dictionary.items())
         with tqdm(total=len(dds_list), desc="Flashing DDS", unit="DDS") as pbar:
@@ -392,25 +459,18 @@ class Experiment_Builder:
             pulse_lengths.append(section['duration'])
 
         # Debug prints for verification
-        print(f"Pulses: {pulses}, End Pulse: {self.end_pulse}")
+        print(f"Pulses: {pulses}, End Pulse: {self.pulse_sequencer.end_pulse}")
         print(f"Pulse Lengths: {pulse_lengths}")
-
+        self.pulse_sequencer.pulses = pulses
+        self.pulse_sequencer.pulse_lengths = pulse_lengths
+        self.pulse_sequencer.N_Cycles = self.N_Cycles
         # Write to the pulse sequencer
-        write_pulse_sequencer(
-            Port=self.pulse_sequencer_port,  
-            Pulses=pulses,
-            Pulse_Lengths=pulse_lengths,
-            Continuous=Continuous,
-            N_Cycles=self.N_Cycles,
-            End_Pulse=self.end_pulse
-        )
+        self.pulse_sequencer.write_sequence(Continuous=Continuous)
                 
-        # print("allowing ion to resettle...")
-        # input("Press Enter when the ion has resettled.")
-
 class Experiment_Runner:
-    def __init__(self, dds_dictionary, timeout=10, pmt_threshold=None, sp_threshold=None, expected_fluorescence=None, catch_timeout=10, load_timeout=100):
+    def __init__(self, dds_dictionary, pulse_sequencer, timeout=10, pmt_threshold=None, sp_threshold=None, expected_fluorescence=None, pulse_expected_fluorescence=0, catch_timeout=20, load_timeout=100):
         # Initialize QuTau_Reader with channels
+        self.pulse_sequencer = pulse_sequencer
         self.qutau_reader = Server.master(QuTau_Reader, max_que=5)
         # Initialize clients for PMT_Reader and RedlabsDAC
         self.pmt_reader_client = Client(PMT_Reader)
@@ -420,6 +480,7 @@ class Experiment_Runner:
         self.pmt_threshold = pmt_threshold
         self.sp_threshold = sp_threshold
         self.expected_fluorescence = expected_fluorescence
+        self.pulse_expected_fluorescence = pulse_expected_fluorescence
 
         self.pmt_counts = 0
     
@@ -482,14 +543,15 @@ class Experiment_Runner:
                     avg_counts = sum(recent_counts) / len(recent_counts) if recent_counts else 0
                     lower_bound = self.expected_fluorescence * 0.8
                     upper_bound = self.expected_fluorescence * 1.2
-                    print(avg_counts)
+
                     if lower_bound <= avg_counts <= upper_bound:
                         print(f"Recent PMT counts ({avg_counts}) within 20% of expected fluorescence ({self.expected_fluorescence}).")
                         print("Caught ion.")
                         trapped = True
                         break
                     else:
-                        print(f"Recent PMT counts ({avg_counts}) not within 20% of expected fluorescence ({self.expected_fluorescence}). Retrying...")
+                        sys.stdout.write(f"\rRecent PMT counts ({avg_counts:.2f}) not within 20% of expected fluorescence ({self.expected_fluorescence}). Retrying...")
+                        sys.stdout.flush()
                 
                 # Sleep based on PMT_Reader's rate
                 time.sleep(1 / rate)
@@ -506,6 +568,7 @@ class Experiment_Runner:
         ion_status = False  # Initialize ion_status before using it in the loop condition
         while not ion_status and loop < N_attempts:
             loop += 1
+            print(f"Loading attempt {loop}/{N_attempts}...")
             ion_status = self.load()
             if ion_status:
                 print("Ion loading succeeded.")
@@ -530,7 +593,7 @@ class Experiment_Runner:
         except Exception as e:
             print(f"Failed to initialize digital pins: {e}")
             return
-        self.redlabs_dac_client.set_trap_depth(0.8)
+        self.redlabs_dac_client.set_trap_depth(0.7)
         self.loading = True
         rate = self.pmt_reader_client.get_rate()
         trapped = False
@@ -545,8 +608,6 @@ class Experiment_Runner:
                     recent_counts = counts[-3:]  # Assuming counts is a list of values
                     avg_counts = sum(recent_counts) / len(recent_counts) if recent_counts else 0
                     if avg_counts > self.pmt_threshold:
-                        print(avg_counts)
-                        print(self.pmt_threshold)
                         trapped = self.single_ion_check()
                         self.redlabs_dac_client.set_trap_depth(1.2)
                         break
@@ -558,7 +619,6 @@ class Experiment_Runner:
 
         return trapped
     
-
     def single_ion_check(self):
         """
         Checks if there is a single ion in the trap by checking the pmt counts are in an acceptable range
@@ -571,19 +631,21 @@ class Experiment_Runner:
                 counts = counts[1]['PMT']
                 recent_counts = counts[-3:]
                 avg_counts = sum(recent_counts) / len(recent_counts) if recent_counts else 0
-                lower_bound = self.expected_fluorescence * 0.8
-                upper_bound = self.expected_fluorescence * 1.2
+                lower_bound = self.expected_fluorescence * 0.9
+                upper_bound = self.expected_fluorescence * 1.1
                 print(avg_counts)
                 if lower_bound <= avg_counts <= upper_bound:
-                    print(f"Recent PMT counts ({avg_counts}) within 20% of expected fluorescence ({self.expected_fluorescence}).")
+                    print(f"Recent PMT counts ({avg_counts}) within 10% of expected fluorescence ({self.expected_fluorescence}). Single Ion Check Passed.")
+                    print("Sleeping for 5 seconds to allows ion to cool")
+                    time.sleep(5)
                     return True
                 else:
-                    print(f"Recent PMT counts ({avg_counts}) not within 20% of expected fluorescence ({self.expected_fluorescence}). Retrying ({attempt + 1}/5)...")
+                    print(f"Recent PMT counts ({avg_counts}) not within 10% of expected fluorescence ({self.expected_fluorescence}). Retrying ({attempt + 1}/5)...")
                     time.sleep(1)
             print(f"Failed to get PMT counts within 20% of expected fluorescence after 5 attempts.")
             self.redlabs_dac_client.set_trap_depth(0)
             time.sleep(1)
-            self.redlabs_dac_client.set_trap_depth(0.8)
+            self.redlabs_dac_client.set_trap_depth(0.7)
             return False
     
     def stop_load(self):
@@ -597,43 +659,46 @@ class Experiment_Runner:
             print(f"Failed to reset DAC pins: {e}")
 
     def start_experiment(self, N=None):
-        for dds in self.dds_dictionary.values():
-            dds.exit_trapping_mode()
-        self.running = True
-        iteration = 0
-        self.qutau_reader.enter_experiment_mode()
-        # Calibrate run time on the first run
-        self.calibrate_run_time()
-        iteration += 1 # Increment iteration after calibration run
-        try:
-            while self.running:
-                if N is not None and iteration >= N: #stop after N runs
-                    print("Reached the maximum number of iterations. Stopping experiment.")
-                    self.qutau_reader.exit_experiment_mode()
-                    break
+        self.N = N  # Remember N for resuming
+        self.N_Valid_Pulses = 0  # This variable keeps track of the true number of cycles run, i.e., the number of pulse sequences run whilst the ion is nicely trapped
+        self.N_Total_Pulses = 0
 
-                self.start_pulse_sequencer()
-                iteration += 1 # Increment iteration after each run
-
-                if keyboard.is_pressed('q'):
-                    print("Manual exit requested. Stopping experiment.")
-                    self.running = False
-                    self.qutau_reader.exit_experiment_mode()
-                    break
-
-                if keyboard.is_pressed('p'):
-                    print("Pause requested. Pausing experiment.")
+        # Check ion status before starting the calibration run
+        ion_status = self.check_ion()
+        if not ion_status:
+            print("Ion check failed. Attempting to catch ion...")
+            ion_status = self.catch()
+            if not ion_status:
+                ion_status = self.load_loop()
+                if not ion_status:
+                    print("Failed to load ion. Pausing experiment.")
                     self.running = False
                     self.pause_experiment()
-                    break
-        except KeyboardInterrupt:
-            print("Experiment interrupted. Exiting experiment mode.")
-            self.qutau_reader.exit_experiment_mode()
+                    return
+
+        for dds in self.dds_dictionary.values():
+            dds.exit_trapping_mode()
+        self.clear_channels()
+        self.iteration = 0
+        self.qutau_reader.enter_experiment_mode()
+        self.calibrate_run_time()  # Calibrate run time on the first run
+        self.iteration += 1  # Increment iteration after calibration run
+        self.process_data()
+        laser_status, ion_status = self.run_diagnostics()
+        # Continue the experiment if diagnostics passed
+        self.running = True
+        if not laser_status:
+            self.discard_data()
+        elif laser_status:
+            self.save_data()
+        if not laser_status or not ion_status:  # If diagnostics fail, stop the loop
             self.running = False
-    
+        self.experiment_loop()
+
+
     def calibrate_run_time(self):
         print(f"Calibrating run time for input to go HIGH on {self.channel_name} for up to {self.timeout} seconds...")
-        control_pulse_sequencer("COM5", "Start")
+        self.pulse_sequencer.start()
         start_time = time.time()
 
         while True:
@@ -649,69 +714,130 @@ class Experiment_Runner:
                 self.running = False
                 break
             
-            time.sleep(0.001)
-
-    def start_pulse_sequencer(self):
-        print(f"Waiting for input to go HIGH on {self.channel_name} for up to {self.timeout} seconds...")
-        control_pulse_sequencer("COM5", "Start")
-        
-        # Sleep for the calibrated run time
-        if self.run_time is not None:
-            time.sleep(self.run_time)
-
-        start_time = time.time()
-
-        while True:
-            input_state = self.task.read()
-            if input_state:
-                print("Input high detected. Breaking out of loop and running diagnostics...")
-                break
-
-            elapsed_time = time.time() - start_time
-            if elapsed_time >= self.timeout:
-                print("Timeout reached. The input never went HIGH. Pausing experiment.")
-                self.running = False
-                break
-            
             time.sleep(0.0001)
 
-        self.qutau_reader.get_data()
+    def experiment_loop(self):
+        try:
+            while True:
+                if self.N is not None and self.iteration >= self.N:  # Stop after N runs
+                    print(f"Finished running {self.N} iterations of {self.pulse_sequencer.N_Cycles} Cycles.")
+                    self.qutau_reader.exit_experiment_mode()
+                    break
 
-        if self.running:
-            self.run_diagnostics()
-            if self.running:
-                print("Diagnostics successful. Restarting pulse sequencer...")
-            else:
-                print("Diagnostics failed. Pausing experiment.")
-                self.pause_experiment()
-        else:
-            self.pause_experiment()
+                if not self.running:
+                    print("Experiment paused. Waiting to resume...")
+                    while not keyboard.is_pressed('p'):
+                        time.sleep(0.1)
+                    print("Resuming experiment...")
+                    self.running = True
+
+                self.pulse_sequencer.start()
+                print(f"Waiting for input to go HIGH on {self.channel_name} for up to {self.timeout} seconds...")
+
+                # Sleep for the calibrated run time
+                if self.run_time is not None:
+                    time.sleep(self.run_time)
+
+                start_time = time.time()
+
+                while True:
+                    input_state = self.task.read()
+                    if input_state:
+                        print("Input high detected. Processing data and running diagnostics...")
+                        if self.running:
+                            self.process_data()
+                            laser_status, ion_status = self.run_diagnostics()
+
+                            if not laser_status or not ion_status:
+                                self.running = False
+                                self.pause_experiment()
+                                break
+
+                            if laser_status:
+                                self.save_data()
+                                self.iteration += 1  # Increment iteration after each run
+
+                            break
+
+                    elapsed_time = time.time() - start_time
+                    if elapsed_time >= self.timeout:
+                        print("Timeout reached. The input never went HIGH. Stopping experiment.")
+                        self.running = False
+                        self.pause_experiment()
+                        break
+
+                    # Always check for manual pause
+                    if keyboard.is_pressed('p'):
+                        print("Manual pause triggered.")
+                        self.running = False
+                        self.pause_experiment()
+                        break
+
+        except KeyboardInterrupt:
+            print("Experiment interrupted manually.")
+            self.running = False
+            self.pause_experiment()  # Always call pause_experiment on interruption
+
+    def process_data(self):
+        """Handle data processing."""
+        self.qutau_reader.get_data()
+        # here we filter data to remove runs where the ion was not trapped.
+
+        pulse_sequence_length = self.pulse_sequencer.sequence_length * 1E-6
+        # expected_fluorescence_per_pulse = self.expected_fluorescence * self.pulse_sequencer.gated_fraction * pulse_sequence_length
+        valid, total = self.qutau_reader.filter_runs_for_fluorescence(self.pulse_expected_fluorescence, pulse_sequence_length, self.pulse_sequencer.N_Cycles/100)
+        self.N_Valid_Pulses += valid
+        self.N_Total_Pulses += total
+        print(f"Total number of valid pulses: {self.N_Valid_Pulses}")
+        print(f"Total number of pulses: {self.N_Total_Pulses}")
+        self.qutau_reader.compute_time_diff(pulse_sequence_length)
 
     def run_diagnostics(self):
+        """Perform diagnostics and handle data saving or discarding based on results."""
         laser_status = self.check_lasers()
         if not laser_status:
-            print("Laser check failed. Pausing experiment.")
-            self.pause_experiment()
-            self.discard_data()
-            return
+            print("Laser check failed. Discarding data and pausing experiment.")
         
-        self.qutau_reader.compute_time_diff()
         ion_status = self.check_ion()
-
-        if ion_status:
-            self.save_data()
-
         if not ion_status:
-            self.discard_data()
+            print("Ion check failed. Attempting to catch ion...")
             ion_status = self.catch()
             if not ion_status:
-                trapped = self.load_loop()
-                if trapped:
-                    return
-                if not trapped:
-                    self.pause_experiment()
-                    return
-            
+                ion_status = self.load_loop()
+
+        return laser_status, ion_status  # Return both statuses for further handling
+
+    def pause_experiment(self):
+        """Pause the experiment and allow manual resume."""
+        self.qutau_reader.exit_experiment_mode()
+        print("Experiment paused. Press 'P' to resume.")
+        while not self.running:  # Wait for running to be set to True
+            if keyboard.is_pressed('p'):
+                print("Resuming the experiment...")
+                self.running = True
+                self.resume_experiment()
+                break
+            time.sleep(0.1)
+
+    def resume_experiment(self):
+        """Resume the experiment."""
+        if not self.check_lasers():
+            print("Lasers not locked. Stopping experiment.")
+            self.running = False
+            return
+
+        trapped = self.single_ion_check()
+        if not trapped:
+            trapped = self.load_loop()
+            if not trapped:
+                print("Failed to trap ion.")
+                self.running = False
+                return
+
+        for dds in self.dds_dictionary.values():
+            dds.exit_trapping_mode()
+        self.experiment_loop()
+     
     def check_ion(self):
         if self.pmt_threshold is not None:
             # Calculate pmt_counts as the sum of the lengths of recent_time_diffs for all channels in mode "signal-f"
@@ -766,7 +892,7 @@ class Experiment_Runner:
         # Plot histograms for each channel
         for channel in channels:
             time_diffs_us = np.array(channel.time_diffs) * 1E6  # Convert to NumPy array and multiply by 1E6
-            
+            print(np.sort(time_diffs_us))
             # Apply lower cutoff if specified
             if lower_cutoff is not None:
                 time_diffs_us = time_diffs_us[time_diffs_us >= lower_cutoff]
@@ -819,4 +945,3 @@ class Experiment_Runner:
             counts_in_window[channel.name] = len(time_diffs_us)
         
         return counts_in_window
-

@@ -6,17 +6,18 @@ extensions = [
     Extension(
         "adriq.tdc_functions",
         ["adriq/tdc_functions.pyx"],
-        include_dirs=[np.get_include()]
+        include_dirs=[np.get_include()],
+        extra_compile_args=["-O3", "-Wall"]  # Add optimization and warning flags
     )
 ]
 
 setup(
     name='adriq',
     version='1.0',
-    packages=find_packages(),  # This will include the 'adriq' package
+    packages=find_packages(),
     include_package_data=True,
     package_data={
-        'adriq': ['DLL_32bit/*.dll', 'DLL_64bit/*.dll'],  # Include DLL files
+        'adriq': ['DLL_32bit/*.dll', 'DLL_64bit/*.dll'],
     },
     install_requires=[
         # List any dependencies here
