@@ -5,15 +5,16 @@ import atexit
 import time
 
 class Server:
-    def __init__(self, service_class, max_que=5):
-        self.service_instance = service_class()  # Create an instance of the service class
+    def __init__(self, service_class, max_que=5, *service_args, **service_kwargs):
+        # Create an instance of the service class with the provided arguments
+        self.service_instance = service_class(*service_args, **service_kwargs)
         self.service_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.service_socket.bind((self.service_instance.host, self.service_instance.port))
         self.service_socket.listen(max_que)
         self.running = True
         print(f"Server listening on port {self.service_instance.port}...")
         atexit.register(self.shutdown)
-
+ 
     def listen(self):
         while self.running:
             try:
@@ -21,44 +22,46 @@ class Server:
                 threading.Thread(target=self.handle_client, args=(client_socket,), daemon=True).start()
             except OSError:
                 break
-
+ 
     def handle_client(self, client_socket):
         try:
             while True:
                 data = client_socket.recv(4096)
                 if not data:
-                    break  # End communication with this client, but keep server running
+                    break
                 command = pickle.loads(data)
-
+ 
                 if command["method"] == "SHUTDOWN":
                     self.shutdown()
                     break
-
+ 
                 method_name = command["method"]
                 args = command["args"]
                 kwargs = command["kwargs"]
-
+ 
                 try:
                     method = getattr(self.service_instance, method_name)
                     result = method(*args, **kwargs)
                     response = {"success": True, "result": result}
                 except Exception as e:
                     response = {"success": False, "error": str(e)}
-
+ 
                 client_socket.sendall(pickle.dumps(response))
         except Exception as e:
             print(f"Error in handle_client: {e}")
         finally:
             client_socket.close()
-
+ 
     def shutdown(self):
         if self.running:
+            print("Shutting down server...")
             self.running = False
             self.service_socket.close()
             if hasattr(self.service_instance, "close"):
                 self.service_instance.close()
+ 
     @classmethod
-    def master(cls, service_class, max_que):
+    def master(cls, service_class, max_que, *service_args, **service_kwargs):
         try:
             client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             client.connect((service_class.host, service_class.port))
@@ -67,12 +70,10 @@ class Server:
             time.sleep(1)
         except ConnectionRefusedError:
             print("Server is not running.")
-        
         print("Starting new server...")
-        server_instance = cls(service_class, max_que)
+        server_instance = cls(service_class, max_que, *service_args, **service_kwargs)
         threading.Thread(target=server_instance.listen, daemon=True).start()
         return server_instance.service_instance  # Return the service instance
-
 
 class Client:
     def __init__(self, service_class, max_que=5):

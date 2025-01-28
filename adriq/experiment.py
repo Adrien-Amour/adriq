@@ -12,6 +12,47 @@ import time
 import keyboard
 from tqdm import tqdm
 
+import configparser
+import os
+ 
+
+def load_dds_dict(mode: str, dds_config: str):
+    # Initialize the configuration dictionary based on the mode
+    dds_dict = {}
+ 
+    # Load the configuration file
+    config = configparser.ConfigParser()
+    if not os.path.exists(dds_config):
+        raise FileNotFoundError(f"Config file not found: {dds_config}")
+    config.read(dds_config)
+    # Check that the mode is either 'ram' or 'singletone'
+    if mode not in ['ram', 'singletone']:
+        raise ValueError("Mode must be either 'ram' or 'singletone'")
+    # Iterate through the sections of the config file to populate the DDS dictionary
+    for section in config.sections():
+        port = config[section].get("port")
+        board = int(config[section].get("board"))
+        mode = config[section].get("mode")
+        pulse_sequencer_pin = int(config[section].get("pulse_sequencer_pin"))
+        # Directly retrieve the calibration file path (it's fully specified now)
+        calibration_file = config[section].get("calibration_file")
+        if mode == 'singletone':
+            dds_dict[section] = DDS_Singletone(
+                port=port,
+                board=board,
+                mode=mode,
+                pulse_sequencer_pin=pulse_sequencer_pin,
+                calibration_file=calibration_file
+            )
+        else:  # Default to DDS_Ram
+            dds_dict[section] = DDS_Ram(
+                port=port,
+                board=board,
+                mode=mode,
+                pulse_sequencer_pin=pulse_sequencer_pin,
+                calibration_file=calibration_file
+            )
+    return dds_dict
 
 
 class DDS_Ram:
@@ -128,7 +169,45 @@ class DDS_Ram:
                 self.set_frequency(self.frequency)
         
         ram_profile_setting(self.port, self.board, 0, Start_Address=2, End_Address=2, Profile_Mode="Direct Switch")
-        
+
+def load_dds_dict(mode: str, dds_config: str):
+    # Initialize the configuration dictionary based on the mode
+    dds_dict = {}
+ 
+    # Load the configuration file
+    config = configparser.ConfigParser()
+    if not os.path.exists(dds_config):
+        raise FileNotFoundError(f"Config file not found: {dds_config}")
+    config.read(dds_config)
+    # Check that the mode is either 'ram' or 'singletone'
+    if mode not in ['ram', 'singletone']:
+        raise ValueError("Mode must be either 'ram' or 'singletone'")
+    # Iterate through the sections of the config file to populate the DDS dictionary
+    for section in config.sections():
+        port = config[section].get("port")
+        board = int(config[section].get("board"))
+        mode = config[section].get("mode")
+        pulse_sequencer_pin = int(config[section].get("pulse_sequencer_pin"))
+        # Directly retrieve the calibration file path (it's fully specified now)
+        calibration_file = config[section].get("calibration_file")
+        if mode == 'singletone':
+            dds_dict[section] = DDS_Singletone(
+                port=port,
+                board=board,
+                mode=mode,
+                pulse_sequencer_pin=pulse_sequencer_pin,
+                calibration_file=calibration_file
+            )
+        elif mode == 'ram':  # Default to DDS_Ram
+            dds_dict[section] = DDS_Ram(
+                port=port,
+                board=board,
+                mode=mode,
+                pulse_sequencer_pin=pulse_sequencer_pin,
+                calibration_file=calibration_file
+            )
+    return dds_dict
+
 class Pulse_Sequencer:
     def __init__(self, port="COM5", ps_end_pin=2, pmt_gate_pin=1, ps_sync_pin=0):
         """

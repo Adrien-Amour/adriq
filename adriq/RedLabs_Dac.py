@@ -7,6 +7,7 @@ from tkinter import ttk, messagebox
 import tkinter as tk
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
+from datetime import datetime
 import threading
 import socket
 import pickle
@@ -156,13 +157,15 @@ class Redlabs_DAC:
         print("All pins reset to LOW")
 
 class TrapControlFrame(tk.Frame):
-    def __init__(self, master, tdc_reader, redlabs_dac, default_h=0, default_v=0, default_trap_depth=0):
+    def __init__(self, master, tdc_reader, redlabs_dac, config_file="dc_null_history.csv", default_trap_depth=0):
         super().__init__(master)
         self.master = master
         self.tdc_client = Client(tdc_reader)
         self.redlabs_dac_client = Client(redlabs_dac)
+        self.config_file = config_file
+        self.default_h, self.default_v = self.load_default_hv()
         self.grid(padx=10, pady=10)
-        self.create_widgets(default_h, default_v, default_trap_depth)
+        self.create_widgets(self.default_h, self.default_v, default_trap_depth)
         self.scan_thread = None
         self.micromotion_thread = None
         self.scan_hv_thread = None
@@ -171,6 +174,38 @@ class TrapControlFrame(tk.Frame):
         self.scan_hv_window = None
         self.micromotion_window = None
         self.ax = None  # Initialize ax to None
+
+    def load_default_hv(self):
+        try:
+            data = np.genfromtxt(self.config_file, delimiter=',', dtype=None, names=True, encoding=None)
+            if data.size == 0:
+                raise ValueError("Config file is empty.")
+            if data.ndim == 0:  # Handle case where there's only one row of data
+                data = np.array([data])
+            latest_entry = data[-1]
+            return latest_entry['H'], latest_entry['V']
+        except Exception as e:
+            print(f"Error loading config file: {e}")
+            return 0, 0  # Default values if loading fails
+
+    def save_hv(self):
+        try:
+            data = np.genfromtxt(self.config_file, delimiter=',', dtype=None, names=True, encoding=None)
+            if data.size == 0:
+                raise ValueError("Config file is empty.")
+            if data.ndim == 0:  # Handle case where there's only one row of data
+                data = np.array([data])
+        except (IOError, ValueError):
+            data = np.array([], dtype=[('H', 'f8'), ('V', 'f8'), ('Date', 'U19')])
+
+        new_entry = np.array([(self.spinbox_H.get(), self.spinbox_V.get(), datetime.now().strftime("%Y-%m-%d %H:%M:%S"))],
+                            dtype=[('H', 'f8'), ('V', 'f8'), ('Date', 'U19')])
+        if data.size == 0:
+            data = new_entry
+        else:
+            data = np.concatenate((data, new_entry))
+        np.savetxt(self.config_file, data, delimiter=',', fmt=['%.4f', '%.4f', '%s'], header='H,V,Date', comments='')
+        print("H and V values saved.")
 
     def create_widgets(self, default_h, default_v, default_trap_depth):
         static_frame = tk.Frame(self, relief=tk.RAISED, borderwidth=2)
@@ -195,18 +230,21 @@ class TrapControlFrame(tk.Frame):
         self.spinbox_trap_depth.set_callback(self.update_trap_depth)
         self.update_trap_depth(default_trap_depth)  # Call the callback with the initial value
 
-        self.vi_output = tk.Text(static_frame, height=4, width=30, relief=tk.SUNKEN, borderwidth=2)
-        self.vi_output.grid(row=3, column=0, columnspan=2, padx=5, pady=5)
+        self.vi_output = tk.Text(static_frame, height=3, width=30, relief=tk.SUNKEN, borderwidth=2)  # Adjust the width
+        self.vi_output.grid(row=3, column=0, columnspan=2, padx=5, pady=5)  # Adjust columnspan
+
+        self.save_button = tk.Button(static_frame, text="Save DC Min", command=self.save_hv)
+        self.save_button.grid(row=4, column=0, columnspan=2, padx=5, pady=5)  # Move the button to the same row as vi_output
 
         self.scan_button = tk.Button(static_frame, text="Scan Trap Depth", command=self.open_scan_window)
-        self.scan_button.grid(row=4, column=0, columnspan=2, padx=5, pady=10)
+        self.scan_button.grid(row=5, column=0, columnspan=2, padx=5, pady=10)
 
         self.micromotion_button = tk.Button(static_frame, text="Single Micromotion Fit", command=self.open_micromotion_window)
-        self.micromotion_button.grid(row=5, column=0, columnspan=2, padx=5, pady=10)
+        self.micromotion_button.grid(row=6, column=0, columnspan=2, padx=5, pady=10)
 
         self.configure(bg="#f0f0f0")
         static_frame.configure(bg="#f0f0f0")
-    
+
         self.update_H(default_h)  # Call the callback with the initial value
         self.update_V(default_v)  # Call the callback with the initial value
 
@@ -245,10 +283,9 @@ class TrapControlFrame(tk.Frame):
     def display_vi_values(self, v1, v2, v3, v4):
         # Display the V_i values in the Text widget
         self.vi_output.delete(1.0, tk.END)  # Clear previous values
-        self.vi_output.insert(tk.END, f"V_1: {v1:.3f}\n")
-        self.vi_output.insert(tk.END, f"V_2: {v2:.3f}\n")
-        self.vi_output.insert(tk.END, f"V_3: {v3:.3f}\n")
-        self.vi_output.insert(tk.END, f"V_4: {v4:.3f}\n")
+        self.vi_output.insert(tk.END, f"V_1: {v1:.3f}  V_2: {v2:.3f}\n")
+        self.vi_output.insert(tk.END, f"\n")
+        self.vi_output.insert(tk.END, f"V_3: {v3:.3f}  V_4: {v4:.3f}")
 
     def open_scan_window(self):
         if self.scan_window is not None and tk.Toplevel.winfo_exists(self.scan_window):

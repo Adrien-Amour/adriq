@@ -77,7 +77,11 @@ calibration_file = input("Enter the filename to save the calibration results: ")
 results, rf_power_fractions, max_rf_power = load_calibration_results(calibration_file)
 
 # Example usage
-fixed_frequency = 400  # Replace with the desired frequency
-plot_optical_power_vs_rf_power(results, rf_power_fractions, fixed_frequency, smooth=True, save=True)
+ # Replace with the desired frequency
+plot_optical_power_vs_rf_power(results, rf_power_fractions, 409.5, smooth=True, save=True)
+plot_optical_power_vs_rf_power(results, rf_power_fractions, 410, smooth=True, save=True)
+plot_optical_power_vs_rf_power(results, rf_power_fractions, 410.5, smooth=True, save=True)
+plot_optical_power_vs_rf_power(results, rf_power_fractions, 411, smooth=True, save=True)
+
 # Plot the 3D heatmap with interactive rotation controls
 plot_3d_heatmap_interactive(results, rf_power_fractions)

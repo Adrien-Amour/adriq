@@ -7,9 +7,7 @@ import sys
 
 
 if __name__ == "__main__":
-    Server.status_check(PMT_Reader, max_que=5)
-    Server.status_check(QuTau_Reader, max_que=5)
-    
+    # qt = QuTau_Reader()
     app = QApplication(sys.argv)
     main_window = QMainWindow()
     main_window.setWindowTitle("PMT Reader Live Counts")

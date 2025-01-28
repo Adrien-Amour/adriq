@@ -9,7 +9,7 @@ from tkinter.filedialog import asksaveasfilename, askopenfilename
 import matplotlib.pyplot as plt
 import numpy as np
 import serial
-
+import configparser
 # Local application/library-specific imports
 from .Custom_Tkinter import CustomSpinbox
 
@@ -741,6 +741,8 @@ class Laser:
         self.phase = [0] * 8
         self.on_state = True  # Initialize with laser ON always
         self.stored_amplitude = [0] * 8  # Store intended amplitude when laser is off
+        self.optical_power = [0.0] * 8  # Store optical power for each profile
+        self.stored_optical_power = [0.0] * 8  # Store intended optical power when laser is off
 
     def apply_general_settings(self):
         """Apply general settings based on the mode."""
@@ -768,14 +770,15 @@ class Laser:
         if not (0 <= frac <= 1):
             raise ValueError("Fractional output power must be between 0 and 1.")
        
-        intended_amplitude, _ = interpolate_rf_power(self.calibration_file, frac, frequency)
+        intended_amplitude, optical_power = interpolate_rf_power(self.calibration_file, frac, frequency)
         intended_amplitude = round(intended_amplitude)
- 
         if self.on_state:
             self.amplitude[profile] = intended_amplitude
             self._apply_single_tone_profile(profile)
+            self.optical_power[profile] = optical_power  # Store the optical power
         else:
             self.stored_amplitude[profile] = intended_amplitude
+            self.stored_optical_power[profile] = optical_power
  
     def update_phase(self, phase: float, profile: int):
         """Update the phase offset for a specific profile."""
@@ -787,10 +790,13 @@ class Laser:
         """Toggle the laser on and off for a specific profile."""
         if self.on_state:  # Laser is on, turn it off
             self.stored_amplitude[profile] = self.amplitude[profile]
+            self.stored_optical_power[profile] = self.optical_power[profile]
             self.amplitude[profile] = 0
+            self.optical_power[profile] = 0.0
             self.on_state = False
         else:  # Laser is off, turn it on
             self.amplitude[profile] = self.stored_amplitude[profile]
+            self.optical_power[profile] = self.stored_optical_power[profile]
             self.on_state = True
        
         self._apply_single_tone_profile(profile)
@@ -808,6 +814,25 @@ class Laser:
             Frequency=self.frequency[profile],
             Verbose=False
         )
+
+def create_laser_objects(config_file, include_lasers):
+    """Creates laser objects based on the given configuration file and includes only specified lasers."""
+    config = configparser.ConfigParser()
+    config.read(config_file)
+    
+    lasers = []
+    for section in config.sections():
+        if section in include_lasers:
+            name = section
+            port = config[section]['port']
+            board = int(config[section]['board'])
+            mode = config[section]['mode']
+            calibration_file = config[section]['calibration_file']
+            laser = Laser(name, port, mode, board, calibration_file)
+            lasers.append(laser)
+    
+    return lasers
+
 
 class LaserControl(tk.Frame):
     def __init__(self, parent):
@@ -845,8 +870,10 @@ class LaserControl(tk.Frame):
     def _initialize_header(self):
         ttk.Label(self.laser_frame, text="Name").grid(column=0, row=0, padx=10, pady=5, sticky="w")
         ttk.Label(self.laser_frame, text="Detuning").grid(column=1, row=0, padx=10, pady=5, sticky="w")
-        ttk.Label(self.laser_frame, text="Optical Power").grid(column=2, row=0, padx=10, pady=5, sticky="w")
-        ttk.Label(self.laser_frame, text="RF Power").grid(column=3, row=0, padx=10, pady=5, sticky="w")
+        ttk.Label(self.laser_frame, text="Power Fraction").grid(column=2, row=0, padx=10, pady=5, sticky="w")
+        ttk.Label(self.laser_frame, text="DDS Amplitude").grid(column=3, row=0, padx=10, pady=5, sticky="w")
+        ttk.Label(self.laser_frame, text="Power (mW)").grid(column=4, row=0, padx=10, pady=5, sticky="w")
+        
 
     def _initialize_preset_buttons(self):
         general_settings_button = tk.Button(self.preset_button_frame, text="General Settings", command=self.apply_general_settings, relief="raised", borderwidth=2)
@@ -890,22 +917,26 @@ class LaserControl(tk.Frame):
         rf_power_label.grid(column=3, row=row, padx=10, pady=5, sticky="ew")
         laser.rf_power_label = rf_power_label
 
+        optical_power_label = ttk.Label(self.laser_frame, text=f"{laser.optical_power[0]}", relief="sunken", anchor="w")
+        optical_power_label.grid(column=4, row=row, padx=10, pady=5, sticky="ew")
+        laser.optical_power_label = optical_power_label
+
         # New On/Off button, smaller size
         on_off_button = tk.Button(self.laser_frame, text="On", width=3, relief="raised", bg="lime green", fg="white")
         on_off_button.config(command=lambda: self._run_in_thread(self._toggle_laser, laser, rf_power_label, on_off_button))
-        on_off_button.grid(column=4, row=row, padx=5, pady=5, sticky="ew")
+        on_off_button.grid(column=5, row=row, padx=5, pady=5, sticky="ew")
         laser.on_off_button = on_off_button
 
         # New Plus button to show laser info
         info_button = tk.Button(self.laser_frame, text="+", width=3, relief="raised", command=lambda: self._show_info(laser))
-        info_button.grid(column=5, row=row, padx=5, pady=5, sticky="ew")
+        info_button.grid(column=6, row=row, padx=5, pady=5, sticky="ew")
 
     def _update_laser_detuning(self, laser, value, row):
         try:
             detuning = float(value)
             fractional_power = float(laser.optical_power_spinbox.get())
             laser.update_detuning(detuning, fractional_power, profile=0)  # Assuming profile 0 for simplicity
-            self._update_rf_power_label(laser)
+            self._update_output_labels(laser)
         except ValueError as e:
             print(f"Invalid detuning value: {e}")
 
@@ -913,7 +944,7 @@ class LaserControl(tk.Frame):
         try:
             fractional_power = float(value)
             laser.update_optical_power(fractional_power, profile=0)  # Assuming profile 0 for simplicity
-            self._update_rf_power_label(laser)
+            self._update_output_labels(laser)
         except ValueError as e:
             print(f"Invalid optical power value: {e}")
 
@@ -923,11 +954,12 @@ class LaserControl(tk.Frame):
             button.config(text="On", bg="lime green", relief="raised")
         else:
             button.config(text="Off", bg="dark green", relief="sunken")
-        self._update_rf_power_label(laser)
+        self._update_output_labels(laser)
         print(f"Laser {laser.name} {'enabled' if laser.on_state else 'disabled'}.")
 
-    def _update_rf_power_label(self, laser):
+    def _update_output_labels(self, laser):
         laser.rf_power_label.config(text=f"{laser.amplitude[0]}")
+        laser.optical_power_label.config(text=f"{laser.optical_power[0]*1E3:.3g}")
 
     def save_preset_dialog(self):
         preset_name = asksaveasfilename(defaultextension=".json", filetypes=[("JSON files", "*.json")])
@@ -970,13 +1002,13 @@ class LaserControl(tk.Frame):
                     self._update_laser_optical_power(laser, laser_preset['optical_power'], 0)
                 if laser.amplitude[0] != laser_preset['rf_power']:
                     laser.amplitude[0] = laser_preset['rf_power']
-                    self._update_rf_power_label(laser)
+                    self._update_output_labels(laser)
                 if laser.on_state != laser_preset['on_state']:
                     self._toggle_laser(laser, laser.rf_power_label, laser.on_off_button)
         print(f"Preset loaded from '{preset_name}'.")
-
-    def add_quick_preset_button(self, preset_name, filename):
-        button = tk.Button(self.preset_button_frame, text=preset_name, bg="red", command=lambda: self.load_preset(filename), relief="raised", borderwidth=2)
+        
+    def add_quick_preset_button(self, preset_name, filename, bg="red"):
+        button = tk.Button(self.preset_button_frame, text=preset_name, bg=bg, command=lambda: self.load_preset(filename), relief="raised", borderwidth=2)
         button.pack(side=tk.LEFT, padx=5, pady=5)
         print(f"Quick preset button for '{preset_name}' added.")
 

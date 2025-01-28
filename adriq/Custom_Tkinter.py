@@ -1,6 +1,18 @@
 import tkinter as tk
+import os
 from tkinter import ttk
 from decimal import Decimal
+from PIL import Image, ImageTk
+
+class Watermark(tk.Label):
+    def __init__(self, parent, image_path=None, scale=0.25, **kwargs):
+        if image_path is None:
+            # Use the default image path
+            image_path = os.path.join(os.path.dirname(__file__), 'resources', 'Adriq_Watermark.png')
+        self.image = Image.open(image_path)
+        self.image = self.image.resize((int(self.image.width * scale), int(self.image.height * scale)), Image.LANCZOS)
+        self.photo = ImageTk.PhotoImage(self.image)
+        super().__init__(parent, image=self.photo, **kwargs)
 
 class CustomIntSpinbox(ttk.Spinbox):
     def __init__(self, master=None, from_=0, to=None, initial_value=0, **kwargs):

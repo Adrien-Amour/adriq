@@ -1,1 +1,1 @@
-![Logo](./Adriq_Logo.png)
+![Logo](./resources/Adriq_Logo.png)

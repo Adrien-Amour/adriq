@@ -7,7 +7,7 @@ import pickle
 import socket
 from datetime import datetime
 from collections import Counter
-
+import configparser
 # Third-party imports
 import numpy as np
 import matplotlib.pyplot as plt
@@ -145,24 +145,33 @@ class QuTau_Channel:
         """Clear the time_diffs attribute."""
         self.time_diffs = []
 
+def load_channels_from_ini(ini_file):
+    """Load channel configurations from an .ini file."""
+    config = configparser.ConfigParser()
+    config.read(ini_file)
+
+    if not config.sections():
+        raise ValueError(f"No valid sections found in the .ini file: {ini_file}")
+    channels = []
+    for section in config.sections():
+        name = config[section].get('name', f'Channel{section}')
+        number = int(config[section].get('number', -1))
+        mode = config[section].get('mode', 'idle')
+        if number == -1:
+            raise ValueError(f"Invalid or missing 'number' for channel '{section}' in {ini_file}")
+        channels.append(QuTau_Channel(name, number, mode=mode))
+    return channels
+
 class QuTau_Reader:
     host = 'localhost'
     port = 8001  # Set a unique port number for QuTau_Reader
-    def __init__(self, channels=None):
-        if channels is None:
-            channels = [
-                QuTau_Channel("single_photon_chan1", 0, mode="signal-sp"),
-                QuTau_Channel("single_photon_chan2", 1, mode="signal-sp"),
-                QuTau_Channel("single_photon_chan3", 2, mode="signal-sp"),
-                QuTau_Channel("single_photon_chan4", 3, mode="signal-sp"),
-                QuTau_Channel("Inactive-4", 4, mode="idle"),
-                QuTau_Channel("trap_drive_chan", 5, mode="trap"),
-                QuTau_Channel("pmt_counts_chan", 6, mode="signal-f"),
-                QuTau_Channel("ps_sync_chan", 7, mode="trigger")
-            ]
-        self.qutau = QuTau.QuTau() # Initialize QuTau object
+ 
+    def __init__(self, ini_file='C:\\Users\\probe\\OneDrive - University of Sussex\\Desktop\\Experiment_Config\\qutau_config.cfg'):
+        # Load channels from the specified .ini file
+        print(ini_file)
+        self.channels = load_channels_from_ini(ini_file)
+        self.qutau = QuTau.QuTau()  # Initialize QuTau object
         self.timebase = self.qutau.getTimebase()
-        self.channels = channels
         self.ensure_all_channels()
         self.ensure_single_trap_drive_and_ps_sync()
         self.default_modes = {ch.number: ch.mode for ch in self.channels}
@@ -307,12 +316,10 @@ class QuTau_Reader:
             return
 
         self.counts = {ch.number: [] for ch in self.channels if ch.mode in ["signal-f", "signal-sp"]}
-        self.counting = True
         self.enter_counting_mode()
         threading.Thread(target=self._counting_loop, daemon=True).start()
 
     def stop_counting(self):
-        self.counting = False
         for ch in self.channels:
             if ch.mode in ["signal-f", "signal-sp"]:
                 ch.counts = []
@@ -325,7 +332,6 @@ class QuTau_Reader:
 
         # Use count_channel_events to count occurrences of each channel
         counts_list = count_channel_events(self.tchannel)
-
         # Generate the count rates list and update channel counts
         for ch in self.channels:
             if ch.active:
@@ -341,7 +347,7 @@ class QuTau_Reader:
             self.times.pop(0)
     
     def _counting_loop(self):
-        while self.counting:
+        while self.current_mode=="counting":
             start_time = time.time()  # Start time for the loop
             self.count_rate()
 
@@ -359,6 +365,12 @@ class QuTau_Reader:
 
     def get_rate(self):
         return self.rate
+    
+    def get_counting(self): # Return the current counting status
+        if self.current_mode == "counting":
+            return True
+        else:
+            return False
 
     def get_N(self):
         return self.N
@@ -463,7 +475,7 @@ class QuTau_Reader:
 
         self.active_channels = previous_channels
         self.qutau.enableChannels(self.active_channels)
-
+        self.enter_idle_mode()
         if was_counting:
             self.start_counting()
         return popt, hist, bin_edges
@@ -819,22 +831,22 @@ class LivePlotter(QWidget):
         """Update the plot with the latest counts."""
         try:
             data = self.count_reader_client.get_counts()
-
             if not data:
                 print("No data received from server.")
                 return
 
             times, counts = data
             self.times = [time.timestamp() for time in times]
-            self.counts = counts["PMT"]  # Assuming a single "PMT" channel for simplicity
 
             # Update plot
             self.plot_widget.clear()
-            self.plot_widget.plot(self.times, self.counts, pen=pg.mkPen('w', width=2))
+            for label, count_values in counts.items():
+                self.plot_widget.plot(self.times, count_values, pen=pg.mkPen('w', width=2), name=label)
 
             # Update the current count rate label
-            if self.counts:
-                current_rate = self.counts[-1]
+            
+            if counts and any(counts.values()):
+                current_rate = [count_values[-1] for count_values in counts.values()]
                 self.label.setText(f"Current Count Rate: {current_rate} counts/s")
             else:
                 self.label.setText("Current Count Rate: N/A")

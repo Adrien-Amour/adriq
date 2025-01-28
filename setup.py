@@ -13,11 +13,11 @@ extensions = [
 
 setup(
     name='adriq',
-    version='1.0',
+    version='1.1',
     packages=find_packages(),
     include_package_data=True,
     package_data={
-        'adriq': ['DLL_32bit/*.dll', 'DLL_64bit/*.dll'],
+        'adriq': ['DLL_32bit/*.dll', 'DLL_64bit/*.dll', 'resources/*'],
     },
     install_requires=[
         # List any dependencies here
