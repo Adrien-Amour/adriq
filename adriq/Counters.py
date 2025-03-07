@@ -20,7 +20,7 @@ from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.ticker import MaxNLocator
 from PyQt5.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QLabel, QPushButton, QHBoxLayout,  QFrame
-from PyQt5.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget, QLabel, QPushButton, QCheckBox, QHBoxLayout
+from PyQt5.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget, QLabel, QPushButton, QCheckBox, QHBoxLayout, QScrollArea
 from PyQt5.QtWidgets import QSpinBox
 import pyqtgraph as pg
 from PyQt5.QtCore import QTimer
@@ -168,7 +168,6 @@ class QuTau_Reader:
  
     def __init__(self, ini_file='C:\\Users\\probe\\OneDrive - University of Sussex\\Desktop\\Experiment_Config\\qutau_config.cfg'):
         # Load channels from the specified .ini file
-        print(ini_file)
         self.channels = load_channels_from_ini(ini_file)
         self.qutau = QuTau.QuTau()  # Initialize QuTau object
         self.timebase = self.qutau.getTimebase()
@@ -202,23 +201,28 @@ class QuTau_Reader:
         print(f"Active channels: {self.active_channels}")
 
     def enter_idle_mode(self):
+        print("Idle mode entered.")
         self.current_mode = "idle"
         self.set_active_channels([])  # No active channels in idle mode
 
     def enter_counting_mode(self):
         self.current_mode = "counting"
         self.times = []  # Clear times array
-        self.set_active_channels(["signal-f", "signal-sp"])
+        self.set_active_channels(["signal-sp"]) #(["signal-f", "signal-sp"])
+        print("Counting mode entered.")
 
     def enter_rf_correlation_mode(self):
+        print("RF correlation mode entered.")
         self.current_mode = "rf_correlation"
         self.set_active_channels(["signal-f", "trap"])
     
     def exit_rf_correlation_mode(self):
+        print("RF correlation mode exited.")
         self.current_mode = "idle"
         self.set_active_channels([])
     
     def enter_experiment_mode(self, experiment_config=None):
+        print("Experiment mode entered.")
         self.current_mode = "experiment"
         
         # Standard experiment configuration
@@ -247,6 +251,7 @@ class QuTau_Reader:
         self.update_active_channels()
 
     def exit_experiment_mode(self):
+        print("Experiment mode exited.")
         self.current_mode = "idle"
         # Reset channel modes to default
         for ch in self.channels:
@@ -284,7 +289,6 @@ class QuTau_Reader:
         signal_chan = signal_chans[0]
         trigger_chan = next(ch.number for ch in self.channels if ch.mode == "trigger")
         
-        print(pulse_window_time)
         # Call the filter_runs function with self.tstamp and self.tchannel
         self.tstamp, self.tchannel, valid_pulse_count, total_pulses = filter_runs(
             tstamp=self.tstamp,
@@ -311,6 +315,7 @@ class QuTau_Reader:
                 ch.recent_time_diffs = time_diffs[signal_chans.tolist().index(ch.number)]
 
     def start_counting(self):
+        print ("Counting started.")
         if self.current_mode in ["experiment", "rf_correlation"]:
             print("Cannot start counting in experiment or RF correlation mode.")
             return
@@ -320,6 +325,7 @@ class QuTau_Reader:
         threading.Thread(target=self._counting_loop, daemon=True).start()
 
     def stop_counting(self):
+        print("Counting stopped.")
         for ch in self.channels:
             if ch.mode in ["signal-f", "signal-sp"]:
                 ch.counts = []
@@ -475,9 +481,12 @@ class QuTau_Reader:
 
         self.active_channels = previous_channels
         self.qutau.enableChannels(self.active_channels)
+        self.exit_rf_correlation_mode()
         self.enter_idle_mode()
         if was_counting:
             self.start_counting()
+        
+
         return popt, hist, bin_edges
 
     def clear_channels(self):
@@ -708,7 +717,6 @@ class MicromotionWindow:
         self.prev_phase = popt[2]
         self.prev_offset = popt[3]
 
-
 class LivePlotter(QWidget):
     def __init__(self, count_reader):
         super().__init__()
@@ -772,9 +780,29 @@ class LivePlotter(QWidget):
         self.counts = []
         self.is_paused = False
         self.is_counting = self.count_reader_client.get_counting()
+        self.colors = ['w', 'r', 'g', 'b', 'y', 'c', 'm']  # List of colors to cycle through
 
         # Initialize counting button state
         self.update_count_button_state()
+
+        # Create checkboxes for each channel in a scroll area
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.checkbox_widget = QWidget()
+        self.checkbox_layout = QVBoxLayout(self.checkbox_widget)
+        self.scroll_area.setWidget(self.checkbox_widget)
+        self.layout.addWidget(self.scroll_area)
+        self.channel_checkboxes = {}
+        self.create_channel_checkboxes()
+
+    def create_channel_checkboxes(self):
+        """Create checkboxes for each channel."""
+        _, counts = self.count_reader_client.get_counts()
+        for i, label in enumerate(counts.keys()):
+            checkbox = QCheckBox(label)
+            checkbox.setChecked(True)
+            self.checkbox_layout.addWidget(checkbox)
+            self.channel_checkboxes[label] = checkbox
 
     def update_count_button_state(self):
         """Update the state of the counting button based on the server's counting status."""
@@ -836,15 +864,17 @@ class LivePlotter(QWidget):
                 return
 
             times, counts = data
+
             self.times = [time.timestamp() for time in times]
 
             # Update plot
             self.plot_widget.clear()
-            for label, count_values in counts.items():
-                self.plot_widget.plot(self.times, count_values, pen=pg.mkPen('w', width=2), name=label)
+            for i, (label, count_values) in enumerate(counts.items()):
+                if self.channel_checkboxes[label].isChecked():
+                    color = self.colors[i % len(self.colors)]  # Cycle through colors
+                    self.plot_widget.plot(self.times, count_values, pen=pg.mkPen(color, width=2), name=label)
 
             # Update the current count rate label
-            
             if counts and any(counts.values()):
                 current_rate = [count_values[-1] for count_values in counts.values()]
                 self.label.setText(f"Current Count Rate: {current_rate} counts/s")

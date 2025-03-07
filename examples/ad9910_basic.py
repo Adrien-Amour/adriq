@@ -6,9 +6,11 @@ import serial.tools.list_ports
 from adriq.Custom_Tkinter import CustomSpinbox, CustomIntSpinbox
 import threading
 
-# Global flag to control scanning
+# Global flags and threads
 scanning = False
 scan_thread = None
+flashing = False
+flash_thread = None
 
 # Function to apply settings
 def apply_settings(event=None):
@@ -16,7 +18,7 @@ def apply_settings(event=None):
     Board = int(board_var.get())
     profile = int(profile_var.get())
     A = amplitude_slider.get()
-    f = frequency_slider.get()
+    f = frequency_slider.get() / 10.0  # Scale down the frequency value
     p = 0  # Assuming phase is fixed at 0
 
     print("Profile Setting profile:", profile, "of Board:", Board, "on COM port:", Standalone_Boards, "Amplitude:", A, "Frequency:", f, "Phase:", p)
@@ -85,6 +87,42 @@ def stop_scanning():
     if scan_thread is not None:
         scan_thread.join()
 
+# Function to flash amplitude
+def flash_amplitude():
+    global flashing
+    flashing = True
+    Standalone_Boards = com_port_var.get()
+    Board = int(board_var.get())
+    profile = int(profile_var.get())
+    flash_amp = int(flash_amplitude_entry.get())
+    on_time = float(on_time_entry.get())
+    off_time = float(off_time_entry.get())
+
+    while flashing:
+        single_tone_profile_setting(Standalone_Boards, Board, profile, PLL_Multiplier=40, Amplitude=flash_amp, Phase_Offset=0, Frequency=frequency_slider.get() / 10.0, Verbose=False)  # Scale down the frequency value
+        time.sleep(on_time)
+        single_tone_profile_setting(Standalone_Boards, Board, profile, PLL_Multiplier=40, Amplitude=0, Phase_Offset=0, Frequency=frequency_slider.get() / 10.0, Verbose=False)  # Scale down the frequency value
+        time.sleep(off_time)
+
+# Function to start flashing in a new thread
+def start_flash_thread():
+    global flash_thread
+    if flash_thread is None or not flash_thread.is_alive():
+        flash_thread = threading.Thread(target=flash_amplitude)
+        flash_thread.start()
+
+# Function to stop flashing
+def stop_flashing():
+    global flashing
+    flashing = False
+    if flash_thread is not None:
+        flash_thread.join()
+
+# Function to update the displayed frequency value
+def update_frequency_label(event=None):
+    frequency_value = frequency_slider.get() / 10.0
+    frequency_label_var.set(f"Frequency: {frequency_value:.1f} Hz")
+
 # Create main window
 root = tk.Tk()
 root.title("AD9910 Profile Settings")
@@ -107,10 +145,17 @@ amplitude_slider.bind("<ButtonRelease-1>", apply_settings)
 
 # Frequency slider
 tk.Label(root, text="Frequency").pack()
-frequency_slider = tk.Scale(root, from_=0, to=1000, orient=tk.HORIZONTAL, length=400)
-frequency_slider.set(200)
+frequency_slider = tk.Scale(root, from_=1500, to=2500, orient=tk.HORIZONTAL, length=400, resolution=1)  # Scale up by 10
+frequency_slider.set(2000)
 frequency_slider.pack()
 frequency_slider.bind("<ButtonRelease-1>", apply_settings)
+frequency_slider.bind("<Motion>", update_frequency_label)
+
+# Frequency label
+frequency_label_var = tk.StringVar()
+frequency_label_var.set(f"Frequency: {frequency_slider.get() / 10.0:.1f} Hz")
+frequency_label = tk.Label(root, textvariable=frequency_label_var)
+frequency_label.pack()
 
 # Upper limit spinbox
 tk.Label(root, text="Amplitude Upper Limit").pack()
@@ -133,7 +178,7 @@ tk.Label(root, text="Profile").pack()
 profile_var = tk.StringVar()
 profile_menu = ttk.Combobox(root, textvariable=profile_var)
 profile_menu['values'] = [str(i) for i in range(8)]
-profile_menu.current(7)  # Default to Profile 7
+profile_menu.current(0)  # Default to Profile 7
 profile_menu.pack()
 
 # Frequency scan settings
@@ -153,6 +198,19 @@ tk.Label(root, text="Timestep (s)").pack()
 timestep_entry = tk.Entry(root)
 timestep_entry.pack()
 
+# Flash amplitude settings
+tk.Label(root, text="Flash Amplitude").pack()
+flash_amplitude_entry = tk.Entry(root)
+flash_amplitude_entry.pack()
+
+tk.Label(root, text="On Time (s)").pack()
+on_time_entry = tk.Entry(root)
+on_time_entry.pack()
+
+tk.Label(root, text="Off Time (s)").pack()
+off_time_entry = tk.Entry(root)
+off_time_entry.pack()
+
 # Apply General Settings button
 general_settings_button = tk.Button(root, text="Apply General Settings", command=apply_general_settings)
 general_settings_button.pack()
@@ -164,6 +222,14 @@ scan_button.pack()
 # Stop Scan button
 stop_button = tk.Button(root, text="Stop Scan", command=stop_scanning)
 stop_button.pack()
+
+# Flash Amplitude button
+flash_button = tk.Button(root, text="Flash Amplitude", command=start_flash_thread)
+flash_button.pack()
+
+# Stop Flash button
+stop_flash_button = tk.Button(root, text="Stop Flash", command=stop_flashing)
+stop_flash_button.pack()
 
 # Run the GUI loop
 root.mainloop()

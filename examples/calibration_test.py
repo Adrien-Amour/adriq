@@ -21,8 +21,8 @@ power_meter = ThorlabsPM100(pm100d)
 
 # Define the parameters
 profile = 0  # Assuming profile 0 is used
-frequency_range = np.arange(410.5, 411, 0.5) # 
+frequency_range = np.arange(350, 450.5, 0.5) # 
 max_rf_power = int(input("\nEnter the max RF power the AOM can take: ").strip())
 
 # Run the calibration
-calibrate_dds(port, board, profile, calibration_file, frequency_range, max_rf_power, power_meter)
+calibrate_dds(port, board, profile, calibration_file, frequency_range, max_rf_power, power_meter, num_rf_points=300)

@@ -14,7 +14,7 @@ class ControlApp(tk.Tk):
     def __init__(self):
     
         self.lasers = create_laser_objects(r"C:\Users\probe\OneDrive - University of Sussex\Desktop\Experiment_Config\dds_config.cfg", include_lasers=[
-            "397a", "397b", "397c", "866", "866 OP", "850 RP", "854 SP1", "850 SP1"
+            "397a", "397b", "397c", "866", "866 OP", "850 RP", "854 Cav", "854 SP1", "850 SP1"
         ])
     
         super().__init__()

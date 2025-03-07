@@ -1,3 +1,4 @@
+
 from adriq.Counters import *
 from adriq.Servers import *
 from PyQt5.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QLabel, QPushButton, QHBoxLayout,  QFrame
@@ -14,14 +15,14 @@ if __name__ == "__main__":
 
     # Create the main widget and layout
     central_widget = QWidget()
-    layout = QVBoxLayout()
+    layout = QHBoxLayout()
 
     # Create the plotters
     plotter1 = LivePlotter(PMT_Reader)
     plotter2 = LivePlotter(QuTau_Reader)
 # 
     # Set fixed square size for each plotter
-    square_size = 400  # Define the desired square size
+    square_size = 600  # Define the desired square size
     plotter1.setFixedSize(square_size, square_size)
     plotter2.setFixedSize(square_size, square_size)
 

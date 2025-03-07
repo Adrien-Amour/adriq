@@ -554,7 +554,7 @@ def general_setting_master(Port, Board):
     Sync_Generator_Polarity=False, Sync_State_Preset_Value=7,
     Output_Sync_Generator_Delay=8, Input_Sync_Receiver_Delay=10)
     write_to_ad9910(Port, 'MCSR', Board, mcsr_wbytes)
-    ad_wbytes = auxiliary_dac_bytes(127)
+    ad_wbytes = auxiliary_dac_bytes(2*127)
     write_to_ad9910(Port, 'AD', Board, ad_wbytes)
 
 def general_setting_slave(Port, Board):
@@ -588,7 +588,7 @@ def general_setting_slave(Port, Board):
         Output_Sync_Generator_Delay=8, Input_Sync_Receiver_Delay=10)
     write_to_ad9910(Port, 'MCSR', Board, mcsr_wbytes)
 
-    ad_wbytes = auxiliary_dac_bytes(127)
+    ad_wbytes = auxiliary_dac_bytes(2*127)
     write_to_ad9910(Port, 'AD', Board, ad_wbytes)
 
 def single_tone_profile_setting(Port, Board, Profile, PLL_Multiplier=40, Amplitude=0, Phase_Offset=0, Frequency=200, Verbose = False):

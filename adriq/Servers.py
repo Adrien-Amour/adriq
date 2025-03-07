@@ -30,7 +30,6 @@ class Server:
                 if not data:
                     break
                 command = pickle.loads(data)
- 
                 if command["method"] == "SHUTDOWN":
                     self.shutdown()
                     break
@@ -63,9 +62,11 @@ class Server:
     @classmethod
     def master(cls, service_class, max_que, *service_args, **service_kwargs):
         try:
+            print("Shutting down existing server...")
             client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             client.connect((service_class.host, service_class.port))
-            client.sendall(pickle.dumps("SHUTDOWN"))
+            command = {"method": "SHUTDOWN", "args": [], "kwargs": {}}
+            client.sendall(pickle.dumps(command))
             client.close()
             time.sleep(1)
         except ConnectionRefusedError:
