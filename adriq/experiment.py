@@ -15,6 +15,7 @@ from tqdm import tqdm
 import configparser
 import os
 
+
 class DDS_Singletone:
     PLL_MULTIPLIER = 40
     VALID_MODES = {'master', 'slave', 'standalone'}
@@ -245,6 +246,8 @@ class DDS_Ram:
     def set_frequency(self, frequency):
         set_ram_frequency(self.port, self.board, frequency)
     
+    def set_phase(self, phase):
+        set_ram_phase(self.port, self.board, phase)
 
     def enter_trapping_mode(self):
         if self.trapping_frequency:
@@ -471,6 +474,25 @@ class Experiment_Builder:
         for key, detuning in detunings.items():
             self.DDS_Dictionary[key].frequency = 200 + detuning / 2  # Assuming the same conversion as for detuning
             self.DDS_Dictionary[key].edited = True
+
+    def set_phases(self, phases_dict):
+        for key in phases_dict:
+            if key not in self.DDS_Dictionary:
+                raise ValueError(f"Unidentified DDS key: {key}")
+       
+        phases = {key: phases_dict[key] for key in phases_dict if key in self.DDS_Dictionary}
+        for key, phase in phases.items():
+            self.DDS_Dictionary[key].phase = phase
+ 
+    def edit_phases(self, phases_dict):
+        for key in phases_dict:
+            if key not in self.DDS_Dictionary:
+                raise ValueError(f"Unidentified DDS key: {key}")
+       
+        phases = {key: phases_dict[key] for key in phases_dict if key in self.DDS_Dictionary}
+        for key, phase in phases.items():
+            self.DDS_Dictionary[key].phase = phase
+            self.DDS_Dictionary[key].set_phase(phase)
                
     def set_trapping_parameters(self, trapping_detuning_dict, trapping_amplitude_dict):
         for key in trapping_detuning_dict:
@@ -572,20 +594,30 @@ class Experiment_Builder:
         """
         This method uses the functions associated to each DDS in each playback section to build the amplitude arrays for each DDS.
         """
+        start_time = time.time()
         total_playback_length = sum(section['duration'] for section in self.playback_sections)
         # Print desired total playback length
         print(f"Intended Playback Length: {total_playback_length:.6f} µs")
         self.N_tot = 0
-
+        
         for key, dds in self.DDS_Dictionary.items():
             if dds.edited:
                 # Initialize amplitude array for this DDS
-                cooling_amplitude, _ = interpolate_rf_power(dds.calibration_file, self.cooling_section['amplitudes'][key], dds.frequency)
+                cooling_amplitude, _ = interpolate_rf_power(
+                    dds.calibration_file, 
+                    self.cooling_section['amplitudes'][key], 
+                    dds.frequency
+                )
 
                 if self.trapping_parameters['amplitudes'][key] is not None:
-                    trapping_amplitude, _ = interpolate_rf_power(dds.calibration_file, self.trapping_parameters['amplitudes'][key], dds.trapping_frequency)
+                    trapping_amplitude, _ = interpolate_rf_power(
+                        dds.calibration_file, 
+                        self.trapping_parameters['amplitudes'][key], 
+                        dds.trapping_frequency
+                    )
                 else:
                     trapping_amplitude = cooling_amplitude  # Use cooling amplitude if trapping amplitude is not specified
+
                 dds.amplitude_array = [trapping_amplitude, trapping_amplitude, cooling_amplitude]  # Initialize with trapping and cooling amplitudes
 
         for section in self.playback_sections:
@@ -607,17 +639,21 @@ class Experiment_Builder:
             # Collect amplitude values for this section
             for key, dds in self.DDS_Dictionary.items():
                 if dds.edited:
+                    # Collect fractional power values for this section
                     fractional_power_array = [
                         section['functions'][key](t - current_time) for t in time_array
                     ]
-                    amplitude_values = [
-                        interpolate_rf_power(dds.calibration_file, f, dds.frequency)[0]
-                        for f in fractional_power_array
-                    ]
-                
+                    # Interpolate amplitudes in a single call
+                    amplitude_values, _ = interpolate_rf_power_array(
+                        dds.calibration_file,
+                        fractional_power_array,
+                        np.full_like(fractional_power_array, dds.frequency)
+                    )
                     dds.amplitude_array.extend(amplitude_values)
             # Update current time to the end of this section
             current_time += effective_playback_length
+        end_time = time.time()
+        print(f"Total time taken to build RAM arrays: {end_time - start_time:.6f} s")
 
     def plot_amplitude_arrays(self):
         plt.figure(figsize=(14, 7))
@@ -837,7 +873,6 @@ class Experiment_Builder_Singletone:
         
         self.pulse_sequencer.write_sequence()
 
-
 class Experiment_Runner:
     def __init__(self, dds_dictionary, pulse_sequencer, timeout=10, pmt_threshold=None, sp_threshold=None, expected_fluorescence=None, pulse_expected_fluorescence=0, catch_timeout=20, load_timeout=100):
         # Initialize QuTau_Reader with channels
@@ -999,7 +1034,9 @@ class Experiment_Runner:
                 if ion_status:
                     print("Single ion detected. Ion loading successful.")
                     return True
-            print("Single ion check failed. Opening trap and retrying...")
+                if not ion_status:
+                    print("Single ion check failed. Opening trap and retrying...")
+                    
             self.redlabs_dac_client.set_trap_depth(0)
             time.sleep(1)
             self.redlabs_dac_client.set_trap_depth(0.8)

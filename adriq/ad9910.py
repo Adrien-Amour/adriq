@@ -719,6 +719,64 @@ def interpolate_rf_power(calibration_file, frac, output_frequency):
             raise ValueError("RF Output too high")
     return int(rf_power_frac * Max_RF_Power), Optical_Power_Output
 
+def interpolate_rf_power_array(calibration_file, frac_array, frequency_array):
+    """
+    Interpolates RF power for arrays of fractional powers and frequencies.
+    This function is optimized for batch processing.
+    """
+    # Load the calibration file once
+    data = np.loadtxt(calibration_file, delimiter=',', skiprows=0)
+    Max_RF_Power = data[0, 0]
+    frequency_col = data[1:, 0] / 2  # Factor of two translates the frequency shift to DDS frequency (double pass)
+    rf_power_fractions = data[0, 1:]  # Assumes the first row contains the fractions
+    optical_power_data = data[1:, 1:]  # The rest of the data
+    max_optical_power_per_frequency = np.max(optical_power_data, axis=1)
+    Max_Optical_Power = np.min(max_optical_power_per_frequency)
+
+    # Ensure inputs are arrays
+    frac_array = np.asarray(frac_array)
+    frequency_array = np.asarray(frequency_array)
+
+    if frac_array.shape != frequency_array.shape:
+        raise ValueError("`frac_array` and `frequency_array` must have the same shape.")
+
+    # Calculate optical power output
+    Optical_Power_Output = frac_array * Max_Optical_Power
+
+    # Initialize results
+    rf_power_output = np.zeros_like(frac_array, dtype=int)
+
+    for i, (frac, freq) in enumerate(zip(Optical_Power_Output, frequency_array)):
+        if frac < 1E-5:
+            rf_power_output[i] = 0
+        else:
+            # Find the indices of the two frequencies closest to the target frequency
+            freq_indices = np.searchsorted(frequency_col, freq, side='left')
+            low_idx = max(freq_indices - 1, 0)
+            high_idx = min(freq_indices, len(frequency_col) - 1)
+
+            low_freq = frequency_col[low_idx]
+            high_freq = frequency_col[high_idx]
+            low_power_data = optical_power_data[low_idx]
+            high_power_data = optical_power_data[high_idx]
+
+            # Interpolate the RF power fraction
+            rf_power_low = np.interp(frac, low_power_data, rf_power_fractions)
+            rf_power_high = np.interp(frac, high_power_data, rf_power_fractions)
+
+            if low_freq == high_freq:
+                rf_power_frac = rf_power_low
+            else:
+                rf_power_frac = np.interp(freq, [low_freq, high_freq], [rf_power_low, rf_power_high])
+
+            if rf_power_frac > 1:
+                raise ValueError("RF Output too high")
+
+            rf_power_output[i] = int(rf_power_frac * Max_RF_Power)
+
+    return rf_power_output, Optical_Power_Output
+
+
 class Laser:
     PLL_MULTIPLIER = 40
     VALID_MODES = {'master', 'slave', 'standalone'}
