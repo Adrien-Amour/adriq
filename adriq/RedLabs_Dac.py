@@ -33,7 +33,7 @@ from adriq.pulse_sequencer import *
 class Redlabs_DAC:
     host = "localhost"
     port = 8002
-    def __init__(self, device_id=0, v1_chan=1, v2_chan=2, v3_chan=3, v4_chan=4, rf_atten_chan=7, 
+    def __init__(self, device_id=0, v1_chan=1, v2_chan=2, v3_chan=3, v4_chan=4, rf_atten_chan=7, piezo_chan=8,
                  shutter_pin=0, oven_pin=1):
         """
         Initializes the RedlabsDAC class with the given device ID and optional pin assignments.
@@ -55,10 +55,22 @@ class Redlabs_DAC:
         self.v3_chan = v3_chan
         self.v4_chan = v4_chan
         self.rf_atten_chan = rf_atten_chan
+        self.piezo_chan = piezo_chan
         # Digital channels (can be changed by arguments)
         self.shutter_pin = shutter_pin
         self.oven_pin = oven_pin
         Redlabs_DIO_Port = self.dio_info.port_info[self.device_id]
+
+
+
+        self.v1 = 0
+        self.v2 = 0
+        self.v3 = 0
+        self.v4 = 0
+
+        self.rf_atten = 0
+
+        self.piezo_v = 0
         
         if Redlabs_DIO_Port.is_port_configurable:
             ul.d_config_port(self.device_id, Redlabs_DIO_Port.type, DigitalIODirection.OUT)
@@ -69,9 +81,11 @@ class Redlabs_DAC:
         """Destructor method to reset pins when the instance is destroyed."""
         self.reset_pins()
 
-    def write_analog_voltage(self, channel, voltage):
+    def write_analog_voltage(self, channel, voltage, Verbose=True):
         """Writes the specified voltage to the specified analog channel."""
-        print(f"Writing {voltage} V to channel {channel}")
+        if Verbose:
+            print(f"Writing {voltage} V to channel {channel}")
+            
         raw_value = ul.from_eng_units(self.device_id, self.ao_range, voltage)
         try:
             ul.a_out(self.device_id, channel, self.ao_range, raw_value)
@@ -103,6 +117,11 @@ class Redlabs_DAC:
         self.write_analog_voltage(self.v3_chan, V_3)
         self.write_analog_voltage(self.v4_chan, V_4)
 
+        self.v1 = V_1
+        self.v2 = V_2
+        self.v3 = V_3
+        self.v4 = V_4
+
         return V_1, V_2, V_3, V_4
 
     def set_digital_pin(self, pin, value):
@@ -126,6 +145,45 @@ class Redlabs_DAC:
             raise ValueError("Attenuation voltage is out of range. Must be between -3 and 3.")
         else:
             self.write_analog_voltage(self.rf_atten_chan, attenuation_voltage)
+            self.rf_atten = attenuation_voltage
+
+    def set_piezo_voltage(self, voltage, step_size=0.005, rate=2.0):
+        """
+        Sets the piezo voltage on the piezo_chan with a smooth ramp.
+
+        Args:
+        - voltage (float): Target voltage to set.
+        - step_size (float): Minimum step size for the ramp. Default is 0.001.
+        - rate (float): Rate of change in volts per second. Default is 1.0 V/s.
+        """
+        if np.abs(voltage) > 10:
+            raise ValueError("Piezo voltage is out of range. Must be between -10 and 10.")
+
+        current_voltage = self.piezo_v
+        voltage_diff = voltage - current_voltage
+
+        # Determine the direction of the ramp
+        step_direction = 1 if voltage_diff > 0 else -1
+
+        # Calculate the number of steps required
+        total_steps = max(int(np.abs(voltage_diff) / step_size), 1)
+
+        # Calculate the delay between steps to achieve the desired rate
+        delay = step_size / rate
+
+        # Ramp the voltage
+        for _ in range(total_steps):
+            current_voltage += step_direction * step_size
+            self.write_analog_voltage(self.piezo_chan, current_voltage, Verbose = False)
+            time.sleep(delay)
+
+            # Stop ramping if the target voltage is reached or exceeded
+            if (step_direction > 0 and current_voltage >= voltage) or (step_direction < 0 and current_voltage <= voltage):
+                break
+
+        # Set the final voltage to ensure accuracy
+        self.write_analog_voltage(self.piezo_chan, voltage)
+        self.piezo_v = voltage
 
     def show_ul_error(self, error):
         """Handles error reporting."""
@@ -544,3 +602,50 @@ class LoadControlPanel(tk.Frame):
 
         finally:
             self.stop_load()
+
+
+
+
+
+# class Other_Dac: #This is a test for now
+#     def __init__(self, device_id=1,TA_854_pin=0, TA_850_pin=1, amp_397a_pin=2, amp_397c_pin=3, amp_866_pin=4, amp_866OP_amp=5, amp_850RP_pin=6, amp_854cav_pin=7, amp_854SP_pin=8, amp_850SP_pin=9):
+#         """
+#         Initializes the Other_Dac class with the given device ID and optional pin assignments.
+#         """
+#         self.device_id = device_id
+#         self.daq_dev_info = DaqDeviceInfo(device_id)
+#         self.ao_info = self.daq_dev_info.get_ao_info()
+#         self.dio_info = self.daq_dev_info.get_dio_info()
+#         self.ao_range = self.ao_info.supported_ranges[0]  # Assuming first supported range
+#         # Analog channels (can be changed by arguments)
+#         self.TA_854_pin = TA_854_pin
+#         self.TA_850_pin = TA_850_pin
+#         self.amp_397a_pin = amp_397a_pin
+#         self.amp_397c_pin = amp_397c_pin
+#         self.amp_866_pin = amp_866_pin
+#         self.amp_866OP_amp = amp_866OP_amp
+#         self.amp_850RP_pin = amp_850RP_pin
+#         self.amp_854cav_pin = amp_854cav_pin
+#         self.amp_854SP_pin = amp_854SP_pin
+
+#     def write_analog_voltage(self, channel, voltage, Verbose=False):
+#         """Writes the specified voltage to the specified analog channel."""
+#         if Verbose:
+#             print(f"Writing {voltage} V to channel {channel}")
+            
+#         raw_value = ul.from_eng_units(self.device_id, self.ao_range, voltage)
+#         try:
+#             ul.a_out(self.device_id, channel, self.ao_range, raw_value)
+#         except ULError as e:
+#             self.show_ul_error(e)
+    
+#     def TTL_out_analog(self, channel, voltage=4.5, Verbose=False):
+#         """Sets the specified channel to high (TTL)."""
+#         if Verbose:
+#             print(f"Setting channel {channel} to TTL high")
+        
+#         raw_value = ul.from_eng_units(self.device_id, self.ao_range, voltage)
+#         try:
+#             ul.a_out(self.device_id, channel, raw_value)
+#         except ULError as e:
+#             self.show_ul_error(e)

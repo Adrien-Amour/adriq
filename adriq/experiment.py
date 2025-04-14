@@ -15,6 +15,10 @@ from tqdm import tqdm
 import configparser
 import os
 
+def gaussian(amplitude, mu, sigma):
+    """Returns a Gaussian function with the given amplitude, mu, and sigma."""
+    return lambda t: amplitude * np.exp(-((t - mu) ** 2) / (2 * sigma ** 2))
+
 
 class DDS_Singletone:
     PLL_MULTIPLIER = 40
@@ -304,7 +308,7 @@ def load_dds_dict(mode: str, dds_config: str):
     return dds_dict
 
 class Pulse_Sequencer:
-    def __init__(self, port="COM5", ps_end_pin=2, pmt_gate_pin=1, ps_sync_pin=0):
+    def __init__(self, port="COM5", ram_start_pin = 4, ps_end_pin=2, pmt_gate_pin=1, ps_sync_pin=0):
         """
         Initializes the PulseSequencer instance.
 
@@ -318,6 +322,7 @@ class Pulse_Sequencer:
         self.ps_end_pin = ps_end_pin
         self.pmt_gate_pin = pmt_gate_pin
         self.ps_sync_pin = ps_sync_pin
+        self.ram_start_pin = ram_start_pin
         
         self._pulses = []  # Placeholder for pulse patterns
         self._pulse_lengths = []  # Placeholder for pulse durations
@@ -359,6 +364,14 @@ class Pulse_Sequencer:
 
         self.sequence_length = total_time
         print(f"Total time: {total_time:.6f} µs, Gated time: {gated_time:.6f} µs, Gated fraction: {self.gated_fraction:.2f}")
+
+
+        # # Modify the second pulse for testing purposes. This is to test for sequencing jitter, i.e plug it into the qutau
+        # if len(self._new_pulses) > 1:
+        #     print(self._new_pulses[1])
+        #     self._new_pulses[1] = self._new_pulses[1][:4] + '1' + self._new_pulses[1][5:]
+        #     print(self._new_pulses[1])
+
 
         # Check if any of the new variables are different from the old ones
         if (self._pulses != self._new_pulses or 
@@ -436,9 +449,14 @@ class Experiment_Builder:
         elif state == 'playback' and self.pulse_sequencer.pmt_gate_pin is not None and pmt_gate_high:
             pulse[self.pulse_sequencer.pmt_gate_pin] = '1'
 
+        
         elif state == 'end':
             pulse[self.pulse_sequencer.pmt_gate_pin] = '1'  # gate pmt at end of sequence
             pulse[self.pulse_sequencer.ps_end_pin] = '1'
+
+        if state == 'playback':
+            pulse[self.pulse_sequencer.ram_start_pin] = '1'
+            
 
         for dds in self.DDS_Dictionary.values():
             if state == 'cooling':
@@ -573,6 +591,26 @@ class Experiment_Builder:
             'functions': section_functions,
             'pmt_gate_high': pmt_gate_high
         })
+
+    def load_section_from_preset(self, preset_path):
+        """
+        Load a section preset from a JSON file and create the section.
+
+        Args:
+            preset_path (str): Path to the JSON file containing the section preset.
+        """
+        with open(preset_path, 'r') as f:
+            preset = json.load(f)
+
+        self.create_section(
+            name=preset["name"],
+            duration=preset["duration"],
+            detunings=preset["detunings"],
+            amplitudes=preset["amplitudes"],
+            pmt_gate_high=preset.get("pmt_gate_high", False)
+        )
+
+        print(f"Loaded section '{preset['name']}' from preset.")
 
     def edit_section(self, name, dds_functions):
         # Find the section by name
@@ -874,7 +912,7 @@ class Experiment_Builder_Singletone:
         self.pulse_sequencer.write_sequence()
 
 class Experiment_Runner:
-    def __init__(self, dds_dictionary, pulse_sequencer, timeout=10, pmt_threshold=None, sp_threshold=None, expected_fluorescence=None, pulse_expected_fluorescence=0, catch_timeout=20, load_timeout=100):
+    def __init__(self, dds_dictionary, pulse_sequencer, timeout=10, pmt_threshold=None, sp_threshold=None, expected_fluorescence=None, pulse_expected_fluorescence=0, catch_timeout=20, load_timeout=100, trigger_mode="normal", cavity_lock=False):
         # Initialize QuTau_Reader with channels
         self.pulse_sequencer = pulse_sequencer
         self.qutau_reader = Server.master(QuTau_Reader, max_que=5)
@@ -889,7 +927,9 @@ class Experiment_Runner:
         self.pulse_expected_fluorescence = pulse_expected_fluorescence
 
         self.pmt_counts = 0
-    
+        
+        self.trigger_mode = trigger_mode  # Trigger mode for the experiment
+
         # Initialize other parts of the experiment as before
         self.task = nidaqmx.Task()
         self.channel_name = '/Dev1/PFI9'  # Replace with actual DAQ input channel
@@ -907,8 +947,27 @@ class Experiment_Runner:
         self.timeout = timeout  # Timeout for the experiment
         self.catch_timeout = catch_timeout
         self.load_timeout = load_timeout
+ 
+        self.cavity_lock = cavity_lock  # Flag for locking the cavity
+        
 
-    def measure_expected_fluorescence(self, measurement_time=5):
+        # Initialize cavity DDS if cavity lock is enabled
+        if cavity_lock and "854 Cav" in self.dds_dictionary:
+            config = dds_dictionary.pop("854 Cav")  # removes it from the dict
+            self.dds_854_cav = DDS_Singletone(
+                port=config.port,
+                board=config.board,
+                mode=config.mode,
+                pulse_sequencer_pin=config.pulse_sequencer_pin,
+                calibration_file=config.calibration_file
+            )
+            self.dds_854_cav.initialise()
+            self.dds_854_cav.set_profile(0, frequency=200, amplitude=0, phase=0)
+            self.dds_854_cav.set_profile(1, frequency=200, amplitude=0, phase=0)
+            self.dds_854_cav.flash()
+    
+
+    def measure_expected_fluorescence(self, measurement_time=2):
         """
         Masures the PMT counts in cooling mode for a few seconds, and updates expected_fluorescence with this value.
         Parameters:
@@ -977,6 +1036,9 @@ class Experiment_Runner:
     def catch(self):
         for dds in self.dds_dictionary.values():
             dds.enter_trapping_mode()
+
+        self.redlabs_dac_client.set_trap_depth(0.8)
+
         start_time = time.time()
         rate = self.pmt_reader_client.get_rate()
         trapped = False
@@ -1011,6 +1073,8 @@ class Experiment_Runner:
         # Reset the DAC pins
         for dds in self.dds_dictionary.values():
             dds.exit_trapping_mode()
+        self.redlabs_dac_client.set_trap_depth(1.2)
+        
         self.catching = False
 
     def load_loop(self, N_attempts=5):
@@ -1025,6 +1089,7 @@ class Experiment_Runner:
             loop += 1
             print(f"Loading attempt {loop}/{N_attempts}...")
             trapped = self.load()
+            time.sleep(1)
             if trapped:
                 ion_status = self.single_ion_check() # check
                 if ion_status:
@@ -1036,10 +1101,6 @@ class Experiment_Runner:
                     return True
                 if not ion_status:
                     print("Single ion check failed. Opening trap and retrying...")
-                    
-            self.redlabs_dac_client.set_trap_depth(0)
-            time.sleep(1)
-            self.redlabs_dac_client.set_trap_depth(0.8)
         print("Ion loading failed after maximum attempts. Pausing experiment.")
         return False
 
@@ -1075,7 +1136,6 @@ class Experiment_Runner:
                     avg_counts = sum(recent_counts) / len(recent_counts) if recent_counts else 0
                     if avg_counts > self.pmt_threshold:
                         trapped = True
-                        self.redlabs_dac_client.set_trap_depth(1.2)
                         break
 
                 # Sleep based on PMT_Reader's rate
@@ -1102,6 +1162,7 @@ class Experiment_Runner:
                 print(avg_counts)
                 if lower_bound <= avg_counts <= upper_bound:
                     print(f"Recent PMT counts ({avg_counts}) within 10% of expected fluorescence ({self.expected_fluorescence}). Single Ion Check Passed.")
+                    self.redlabs_dac_client.set_trap_depth(1.2)
                     return True
                 else:
                     print(f"Recent PMT counts ({avg_counts}) not within 10% of expected fluorescence ({self.expected_fluorescence}). Retrying ({attempt + 1}/5)...")
@@ -1126,7 +1187,7 @@ class Experiment_Runner:
         self.N = N  # Remember N for resuming
         self.N_Valid_Pulses = 0  # This variable keeps track of the true number of cycles run, i.e., the number of pulse sequences run whilst the ion is nicely trapped
         self.N_Total_Pulses = 0
-
+        self.redlabs_dac_client.set_trap_depth(1.2)  # Set trap depth to 0.8V
         # Check ion status before starting the calibration run
         ion_status = self.check_ion()
         if not ion_status:
@@ -1148,13 +1209,21 @@ class Experiment_Runner:
         self.calibrate_run_time()  # Calibrate run time on the first run
         self.iteration += 1  # Increment iteration after calibration run
         self.process_data()
-        laser_status, ion_status = self.run_diagnostics()
+        laser_status, ion_status, cavity_status = self.run_diagnostics()
         # Continue the experiment if diagnostics passed
         self.running = True
+        if not cavity_status:
+            self.discard_data()
+            self.pause_experiment()
+        elif cavity_status:
+            self.save_data()
+
         if not laser_status:
             self.discard_data()
         elif laser_status:
             self.save_data()
+
+            
         if not laser_status or not ion_status:  # If diagnostics fail, stop the loop
             self.running = False
         self.experiment_loop()
@@ -1209,16 +1278,16 @@ class Experiment_Runner:
                         print("Input high detected. Processing data and running diagnostics...")
                         if self.running:
                             self.process_data()
-                            laser_status, ion_status = self.run_diagnostics()
+                            laser_status, ion_status, cavity_status = self.run_diagnostics()
+                            # Continue the experiment if diagnostics passed
+                            self.running = True
 
-                            if not laser_status or not ion_status:
-                                self.running = False
-                                self.pause_experiment()
-                                break
-
-                            if laser_status:
+                            # Handle diagnostics results
+                            if not cavity_status or not laser_status:
+                                self.discard_data()
+                            else:
                                 self.save_data()
-                                self.iteration += 1  # Increment iteration after each run
+                                self.iteration += 1  # Increment iteration after successful run
 
                             break
 
@@ -1253,7 +1322,8 @@ class Experiment_Runner:
         self.N_Total_Pulses += total
         print(f"Total number of valid pulses: {self.N_Valid_Pulses}")
         print(f"Total number of pulses: {self.N_Total_Pulses}")
-        self.qutau_reader.compute_time_diff(pulse_sequence_length)
+
+        self.qutau_reader.compute_time_diff(pulse_sequence_length, trigger_mode = self.trigger_mode)
 
     def run_diagnostics(self):
         """Perform diagnostics and handle data saving or discarding based on results."""
@@ -1262,13 +1332,20 @@ class Experiment_Runner:
             print("Laser check failed. Discarding data and pausing experiment.")
         
         ion_status = self.check_ion()
+
         if not ion_status:
             print("Ion check failed. Attempting to catch ion...")
             ion_status = self.catch()
             if not ion_status:
                 ion_status = self.load_loop()
+        
+        if self.cavity_lock:
+            cavity_status = self.check_cavity()
 
-        return laser_status, ion_status  # Return both statuses for further handling
+        else:
+            cavity_status = True
+
+        return laser_status, ion_status, cavity_status  # Return both statuses for further handling
 
     def pause_experiment(self):
         """Pause the experiment and allow manual resume."""
@@ -1314,15 +1391,55 @@ class Experiment_Runner:
         return True
     
     def check_cavity(self):
-        if self.sp_threshold is not None:
-            # Calculate sp_counts as the sum of the lengths of recent_time_diffs for all channels in mode "signal-sp"
-            sp_counts = sum(len(ch.recent_time_diffs) for ch in self.qutau_reader.channels if ch.mode == "signal-sp")
-            print(f"Single photon counts: {sp_counts}")
-            if sp_counts < self.sp_threshold:
-                print(f"Single photon counts ({sp_counts}) below threshold ({self.sp_threshold}).")
-                return False
+        def get_total_counts_signal_sp():
+            """Calculate the total counts for channels in mode 'signal-sp'."""
+            return sum(sum(ch.counts) for ch in self.qutau_reader.channels if ch.mode == "signal-sp")
+    
+        # Retry logic
+        for attempt in range(5):  # Retry up to 5 times
+            # Reset counts to 0 at the start of each attempt
+            for ch in self.qutau_reader.channels:
+                ch.counts = []
+    
+            if self.cavity_lock and hasattr(self, "dds_854_cav"):
+                self.dds_854_cav.set_profile(0, frequency=200, amplitude=2500, phase=0)
+                self.dds_854_cav.flash()
+                time.sleep(0.03)  # Wait for the DDS to stabilize
+                self.qutau_reader.get_data()
+                
+                time.sleep(0.01)  # Wait for the DDS to stabilize
 
-        print("Ion check passed.")
+                self.dds_854_cav.set_profile(0, frequency=200, amplitude=0, phase=0)
+                self.dds_854_cav.flash()
+                time.sleep(0.03)  # Wait for the DDS to stabilize
+
+                self.qutau_reader.get_data()
+
+
+
+                # Use count_channel_events to count occurrences of each channel
+                counts_list = count_channel_events(self.qutau_reader.tchannel)
+                # Generate the count rates list and update channel counts
+                for ch in self.qutau_reader.channels:
+                    if ch.active:
+                        count = next((count for channel, count in counts_list if channel == ch.number), 0)
+                        ch.counts.append(count)
+
+    
+            # Check if the total counts for "signal-sp" exceed the threshold
+            total_counts_signal_sp = get_total_counts_signal_sp()
+            if total_counts_signal_sp > 2000:  # Threshold value
+                print(f"Cavity lock check passed. Total counts: {total_counts_signal_sp}")
+                return True  # Return True if the threshold is met
+    
+            # Reset counts after the attempt
+            for ch in self.qutau_reader.channels:
+                ch.counts = []
+    
+        # If all attempts fail, reset counts and return False
+        for ch in self.qutau_reader.channels:
+            ch.counts = []
+        return False
 
     def check_lasers(self):
         return True
@@ -1362,7 +1479,7 @@ class Experiment_Runner:
 
         return time_diffs_dict
 
-    def plot_time_diffs_histogram(self, mode, lower_cutoff=None, upper_cutoff=None):
+    def plot_time_diffs_histogram(self, mode, lower_cutoff=None, upper_cutoff=None,n_bins=50, stop = False):
         """
         Plot histograms of the time_diffs attribute for all channels with the specified mode.
         
@@ -1390,11 +1507,14 @@ class Experiment_Runner:
                 time_diffs_us = time_diffs_us[time_diffs_us <= upper_cutoff]
             
             plt.figure(figsize=(10, 6))
-            plt.hist(time_diffs_us, bins=50, edgecolor='black')
+            plt.hist(time_diffs_us, bins=n_bins, edgecolor='black')
             plt.title(f'Histogram of Time Differences for Channel {channel.name}')
             plt.xlabel('Time Difference (μs)')
             plt.ylabel('Frequency')
             plt.grid(True)
+            if not stop:
+                plt.ion()
+                plt.pause(0.1)
             plt.show()
 
     def get_counts_in_window(self, mode, lower_cutoff=None, upper_cutoff=None):

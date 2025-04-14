@@ -389,7 +389,7 @@ class QuTau:
 		ans = self.qutools_dll.TDC_getLastTimestamps(reset,timestamps.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)),channels.ctypes.data_as(ctypes.POINTER(ctypes.c_int8)),ctypes.byref(valid))
          
 		if (ans!=0): # "never fails"
-			print ("Error in TDC_getLastTimestamps:"+err_dict[ans])
+			print ("Error in TDC_getLastTimestamps:"+self.err_dict[ans])
 			
 		return (timestamps, channels, valid.value)
 	

@@ -208,7 +208,7 @@ class QuTau_Reader:
     def enter_counting_mode(self):
         self.current_mode = "counting"
         self.times = []  # Clear times array
-        self.set_active_channels(["signal-sp"]) #(["signal-f", "signal-sp"])
+        self.set_active_channels(["signal-sp", "signal-f"]) #(["43-f", "signal-sp"])
         print("Counting mode entered.")
 
     def enter_rf_correlation_mode(self):
@@ -231,7 +231,7 @@ class QuTau_Reader:
             1: "signal-sp",  # single_photon_chan2
             2: "signal-sp",  # single_photon_chan3
             3: "signal-sp",  # single_photon_chan4
-            4: "idle",       # Inactive-4
+            4: "trigger-ram",       # Inactive-4
             5: "trap",       # trap_drive_chan
             6: "signal-f",   # pmt_counts_chan
             7: "trigger"     # ps_sync_chan
@@ -271,7 +271,7 @@ class QuTau_Reader:
         self.tstamp, self.tchannel = filter_trailing_zeros(self.tstamp, self.tchannel)
         return self.tstamp, self.tchannel
 
-    def filter_runs_for_fluorescence(self, expected_fluorescence, pulse_window_time, bin_size=50000):
+    def filter_runs_for_fluorescence(self, expected_fluorescence, pulse_window_time, bin_size=10000):
         """
         expected_fluorescence: Expected fluorescence rate while the pulse sequence is running
         """
@@ -302,17 +302,33 @@ class QuTau_Reader:
 
         return valid_pulse_count, total_pulses
 
-    def compute_time_diff(self, pulse_window_time=50E-6):
+    def compute_time_diff(self, pulse_window_time=50E-6, trigger_mode="normal"):
 
-        trigger_chan = next(ch.number for ch in self.channels if ch.mode == "trigger")
-        
-        signal_chans = np.array([ch.number for ch in self.channels if ch.mode in ["signal-f", "signal-sp"]], dtype=np.int64)
+        if trigger_mode == "normal":
 
-        time_diffs = compute_time_diffs(self.tstamp, self.tchannel, trigger_chan, signal_chans, pulse_window_time)
-        # Store time differences in the corresponding channel objects
-        for ch in self.channels:
-            if ch.number in signal_chans:
-                ch.recent_time_diffs = time_diffs[signal_chans.tolist().index(ch.number)]
+            trigger_chan = next(ch.number for ch in self.channels if ch.mode == "trigger")
+            
+            signal_chans = np.array([ch.number for ch in self.channels if ch.mode in ["signal-f", "signal-sp"]], dtype=np.int64)
+
+            time_diffs = compute_time_diffs(self.tstamp, self.tchannel, trigger_chan, signal_chans, pulse_window_time)
+            # Store time differences in the corresponding channel objects
+            for ch in self.channels:
+                if ch.number in signal_chans:
+                    ch.recent_time_diffs = time_diffs[signal_chans.tolist().index(ch.number)]
+
+        elif trigger_mode == "ram":
+            trigger_chan = next(ch.number for ch in self.channels if ch.mode == "trigger-ram")
+
+            
+            signal_chans = np.array([ch.number for ch in self.channels if ch.mode in ["signal-f", "signal-sp"]], dtype=np.int64)
+
+            time_diffs = compute_time_diffs(self.tstamp, self.tchannel, trigger_chan, signal_chans, pulse_window_time)
+            # Store time differences in the corresponding channel objects
+            for ch in self.channels:
+                if ch.number in signal_chans:
+                    ch.recent_time_diffs = time_diffs[signal_chans.tolist().index(ch.number)]
+
+
 
     def start_counting(self):
         print ("Counting started.")
@@ -410,6 +426,8 @@ class QuTau_Reader:
             start_time = time.time()
 
             self.get_data()
+            valid_pulse_count, total_pulses = self.filter_runs_for_fluorescence(expected_fluorescence=8000, pulse_window_time=0.5E-6, bin_size=10000)
+            print(f"Run {run + 1}/{no_runs}: Valid pulses: {valid_pulse_count}, Total pulses: {total_pulses}")
             start_time2 = time.time()
             trap_drive_chan = next(ch.number for ch in self.channels if ch.mode == "trap")
             signal_chans = np.array([ch.number for ch in self.channels if ch.mode in ["signal-f"]], dtype=np.int64)
