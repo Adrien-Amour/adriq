@@ -416,25 +416,35 @@ def ram_word_bytes(Array, Mode="Amplitude", PLL_Multiplier=40):
     return ram_bytes   
 
 def send_byte_array_to_pic(Port, byte_array, Verbose):
-    try:
-        ser = serial.Serial(Port, 9600, timeout=1)  # Adjust the port and baud rate as necessary
+    max_retries = 3  # Number of retries
+    for attempt in range(max_retries):
         try:
-            ser.write(byte_array)
-            time.sleep(0.001)  # Adjust the sleep time if necessary
-            if Verbose:
-                print("Sent=")
-                for i in range(len(byte_array)):
-                    print(byte_array[i], end=',')
-                # Read the response (assuming the response is within 64 bytes)
-                response = ser.read(64)  # Adjust the number of bytes to read if necessary
-                print("\nResponse:", response)
-        finally:
-            ser.close()
-            time.sleep(0.001)
-    except serial.SerialException as e:
-        print(f"Serial communication error: {e}")
-    except Exception as e:
-        print(f"Unexpected error: {e}")
+            ser = serial.Serial(Port, 9600, timeout=1)  # Adjust the port and baud rate as necessary
+            try:
+                ser.write(byte_array)
+                time.sleep(0.001)  # Adjust the sleep time if necessary
+                if Verbose:
+                    print("Sent=")
+                    for i in range(len(byte_array)):
+                        print(byte_array[i], end=',')
+                    # Read the response (assuming the response is within 64 bytes)
+                    response = ser.read(64)  # Adjust the number of bytes to read if necessary
+                    print("\nResponse:", response)
+                return  # Exit the function if successful
+            finally:
+                ser.close()
+                time.sleep(0.001)
+        except serial.SerialException as e:
+            print(f"Serial communication error (attempt {attempt + 1}/{max_retries}): {e}")
+        except Exception as e:
+            print(f"Unexpected error (attempt {attempt + 1}/{max_retries}): {e}")
+        
+        # Retry logic
+        if attempt < max_retries - 1:
+            print("Retrying...")
+            time.sleep(0.5)  # Wait before retrying
+        else:
+            print("Failed after 3 attempts.")
 
 def write_to_ad9910(Port, Register, Board, Write_Bytes, Verbose=False):
     Register_dict = {

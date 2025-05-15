@@ -9,18 +9,17 @@ class QuTau:
 		# Determine the DLL directory based on system architecture
 		if sys.maxsize > 2**32:
 			# 64-bit Python
-			dll_dir = pkg_resources.resource_filename('adriq', 'DLL_64bit')
+			dll_dir = pkg_resources.resource_filename('adriq', 'QUTAU_DLL_64bit')
 			dll_name = 'tdcbase.dll'
 			print("Python 64 Bit - loading 64 Bit DLL")
 		else:
 			# 32-bit Python
-			dll_dir = pkg_resources.resource_filename('adriq', 'DLL_32bit')
+			dll_dir = pkg_resources.resource_filename('adriq', 'QUTAU_DLL_32bit')
 			dll_name = 'tdcbase.dll'
 			print("Python 32 Bit - loading 32 Bit DLL")
 
 		# Construct the full path to the DLL
 		dll_path = os.path.join(dll_dir, dll_name)
-		print("DLL Path:", dll_path)
 
 		# Load the DLL
 		self.qutools_dll = ctypes.windll.LoadLibrary(dll_path)

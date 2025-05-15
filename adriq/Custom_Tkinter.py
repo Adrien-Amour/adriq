@@ -5,7 +5,7 @@ from decimal import Decimal
 from PIL import Image, ImageTk
 
 class Watermark(tk.Label):
-    def __init__(self, parent, image_path=None, scale=0.25, **kwargs):
+    def __init__(self, parent, image_path=None, scale=0.28, **kwargs):
         if image_path is None:
             # Use the default image path
             image_path = os.path.join(os.path.dirname(__file__), 'resources', 'Adriq_Watermark.png')
@@ -228,6 +228,7 @@ class CustomSpinbox(ttk.Spinbox):
 
     def set_callback(self, callback):
         self.callback = callback
+    
 
     def clear_selection(self, event):
         self.selection_clear()

@@ -15,9 +15,6 @@ from tqdm import tqdm
 import configparser
 import os
 
-def gaussian(amplitude, mu, sigma):
-    """Returns a Gaussian function with the given amplitude, mu, and sigma."""
-    return lambda t: amplitude * np.exp(-((t - mu) ** 2) / (2 * sigma ** 2))
 
 
 class DDS_Singletone:
@@ -1023,10 +1020,12 @@ class Experiment_Runner:
         trapped = self.single_ion_check()
         if not trapped:
             trapped = self.load_loop()
+
             if trapped:
                 self.start_pulse_sequencer()
 
             if not trapped:
+                self.running = False
                 self.pause_experiment()
                 return
         else:
@@ -1203,6 +1202,7 @@ class Experiment_Runner:
 
         for dds in self.dds_dictionary.values():
             dds.exit_trapping_mode()
+        
         self.clear_channels()
         self.iteration = 0
         self.qutau_reader.enter_experiment_mode()
@@ -1212,21 +1212,17 @@ class Experiment_Runner:
         laser_status, ion_status, cavity_status = self.run_diagnostics()
         # Continue the experiment if diagnostics passed
         self.running = True
-        if not cavity_status:
+        if not cavity_status or not laser_status:
+            print("Diagnostics failed. Discarding data and pausing experiment.")
+            print("Laser status:", laser_status)
+            print("Cavity status:", cavity_status)
             self.discard_data()
-            self.pause_experiment()
-        elif cavity_status:
-            self.save_data()
-
-        if not laser_status:
-            self.discard_data()
-        elif laser_status:
-            self.save_data()
-
-            
-        if not laser_status or not ion_status:  # If diagnostics fail, stop the loop
             self.running = False
-        self.experiment_loop()
+            self.pause_experiment()
+        else:
+            self.save_data()
+            self.iteration += 1  # Increment iteration after successful run
+            self.experiment_loop()
 
     def calibrate_run_time(self):
         print(f"Calibrating run time for input to go HIGH on {self.channel_name} for up to {self.timeout} seconds...")
@@ -1285,6 +1281,8 @@ class Experiment_Runner:
                             # Handle diagnostics results
                             if not cavity_status or not laser_status:
                                 self.discard_data()
+                                self.running = False
+                                self.pause_experiment()
                             else:
                                 self.save_data()
                                 self.iteration += 1  # Increment iteration after successful run
@@ -1344,7 +1342,6 @@ class Experiment_Runner:
 
         else:
             cavity_status = True
-
         return laser_status, ion_status, cavity_status  # Return both statuses for further handling
 
     def pause_experiment(self):
@@ -1512,9 +1509,6 @@ class Experiment_Runner:
             plt.xlabel('Time Difference (μs)')
             plt.ylabel('Frequency')
             plt.grid(True)
-            if not stop:
-                plt.ion()
-                plt.pause(0.1)
             plt.show()
 
     def get_counts_in_window(self, mode, lower_cutoff=None, upper_cutoff=None):

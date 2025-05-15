@@ -82,7 +82,7 @@ if __name__ == "__main__":
     plotter = MicromotionAmplitudePlotter(Redlabs_DAC, QuTau_Reader)
     
     # Define the parameters
-    H = -1.5  # Input value of H
+    H = -1.45  # Input value of H
     V_range = (-0.636, -0.65)  # Range of V values
     V_Values = np.arange(-0.67, -0.65, 0.002)  # Generate V values
     trap_depths = [0.8,1.0]  # Trap depths to test

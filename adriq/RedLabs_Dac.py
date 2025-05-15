@@ -33,7 +33,7 @@ from adriq.pulse_sequencer import *
 class Redlabs_DAC:
     host = "localhost"
     port = 8002
-    def __init__(self, device_id=0, v1_chan=1, v2_chan=2, v3_chan=3, v4_chan=4, rf_atten_chan=7, piezo_chan=8,
+    def __init__(self, device_id=0, v1_chan=1, v2_chan=2, v3_chan=3, v4_chan=4, rf_atten_chan=7, piezo_chan=8, PI_lock_chan=11,
                  shutter_pin=0, oven_pin=1):
         """
         Initializes the RedlabsDAC class with the given device ID and optional pin assignments.
@@ -54,8 +54,11 @@ class Redlabs_DAC:
         self.v2_chan = v2_chan
         self.v3_chan = v3_chan
         self.v4_chan = v4_chan
+
         self.rf_atten_chan = rf_atten_chan
         self.piezo_chan = piezo_chan
+        self.PI_lock_chan = PI_lock_chan #feedback to 423 Piezo
+
         # Digital channels (can be changed by arguments)
         self.shutter_pin = shutter_pin
         self.oven_pin = oven_pin
@@ -71,6 +74,8 @@ class Redlabs_DAC:
         self.rf_atten = 0
 
         self.piezo_v = 0
+
+        self.PI_lock_v = 0
         
         if Redlabs_DIO_Port.is_port_configurable:
             ul.d_config_port(self.device_id, Redlabs_DIO_Port.type, DigitalIODirection.OUT)
@@ -121,6 +126,7 @@ class Redlabs_DAC:
         self.v2 = V_2
         self.v3 = V_3
         self.v4 = V_4
+
 
         return V_1, V_2, V_3, V_4
 
@@ -185,6 +191,14 @@ class Redlabs_DAC:
         self.write_analog_voltage(self.piezo_chan, voltage)
         self.piezo_v = voltage
 
+    def set_PI_lock_voltage(self, voltage):
+        """Sets the PI lock voltage on the PI_lock_chan."""
+        if np.abs(voltage) > 10:
+            raise ValueError("PI lock voltage is out of range. Must be between -10 and 10.")
+        else:
+            self.write_analog_voltage(self.PI_lock_chan, voltage)
+            self.PI_lock_v = voltage
+
     def show_ul_error(self, error):
         """Handles error reporting."""
         print(f"UL Error: {error}")
@@ -213,6 +227,11 @@ class Redlabs_DAC:
         self.set_digital_pin(self.shutter_pin, 0)
         self.set_digital_pin(self.oven_pin, 0)
         print("All pins reset to LOW")
+    
+    def get_piezo_v(self):
+        """Returns the current piezo voltage."""
+        return self.piezo_v
+
 
 class TrapControlFrame(tk.Frame):
     def __init__(self, master, tdc_reader, redlabs_dac, config_file="dc_null_history.csv", default_trap_depth=0):
@@ -603,49 +622,42 @@ class LoadControlPanel(tk.Frame):
         finally:
             self.stop_load()
 
-
-
-
-
-# class Other_Dac: #This is a test for now
-#     def __init__(self, device_id=1,TA_854_pin=0, TA_850_pin=1, amp_397a_pin=2, amp_397c_pin=3, amp_866_pin=4, amp_866OP_amp=5, amp_850RP_pin=6, amp_854cav_pin=7, amp_854SP_pin=8, amp_850SP_pin=9):
-#         """
-#         Initializes the Other_Dac class with the given device ID and optional pin assignments.
-#         """
-#         self.device_id = device_id
-#         self.daq_dev_info = DaqDeviceInfo(device_id)
-#         self.ao_info = self.daq_dev_info.get_ao_info()
-#         self.dio_info = self.daq_dev_info.get_dio_info()
-#         self.ao_range = self.ao_info.supported_ranges[0]  # Assuming first supported range
-#         # Analog channels (can be changed by arguments)
-#         self.TA_854_pin = TA_854_pin
-#         self.TA_850_pin = TA_850_pin
-#         self.amp_397a_pin = amp_397a_pin
-#         self.amp_397c_pin = amp_397c_pin
-#         self.amp_866_pin = amp_866_pin
-#         self.amp_866OP_amp = amp_866OP_amp
-#         self.amp_850RP_pin = amp_850RP_pin
-#         self.amp_854cav_pin = amp_854cav_pin
-#         self.amp_854SP_pin = amp_854SP_pin
-
-#     def write_analog_voltage(self, channel, voltage, Verbose=False):
-#         """Writes the specified voltage to the specified analog channel."""
-#         if Verbose:
-#             print(f"Writing {voltage} V to channel {channel}")
-            
-#         raw_value = ul.from_eng_units(self.device_id, self.ao_range, voltage)
-#         try:
-#             ul.a_out(self.device_id, channel, self.ao_range, raw_value)
-#         except ULError as e:
-#             self.show_ul_error(e)
-    
-#     def TTL_out_analog(self, channel, voltage=4.5, Verbose=False):
-#         """Sets the specified channel to high (TTL)."""
-#         if Verbose:
-#             print(f"Setting channel {channel} to TTL high")
+class PiezoControlPanel(tk.Frame):
+    def __init__(self, master, Redlabs_DAC):
+        super().__init__(master, relief=tk.RAISED, borderwidth=2)
         
-#         raw_value = ul.from_eng_units(self.device_id, self.ao_range, voltage)
-#         try:
-#             ul.a_out(self.device_id, channel, raw_value)
-#         except ULError as e:
-#             self.show_ul_error(e)
+        
+        # Create a DAC client and store it as an instance variable
+        self.DAC = Client(Redlabs_DAC)
+
+        # Create a label
+        label = tk.Label(self, text="Piezo Voltage:")
+        label.pack(side=tk.LEFT, padx=5)
+
+        # Create a CustomSpinbox
+        self.spinbox = CustomSpinbox(self, from_=-10.0, to=10.0, initial_value=0.0, increment=0.1, width=10)
+        self.spinbox.set_callback(self.set_piezo_voltage)  # Set the callback for the spinbox
+        self.spinbox.pack(side=tk.LEFT, padx=5)
+
+        # Start periodic voltage reading
+        self.update_spinbox_with_current_voltage()
+
+    def set_piezo_voltage(self, voltage):
+        """Set the piezo voltage using the DAC client."""
+        try:
+            self.DAC.set_piezo_voltage(voltage, step_size=0.005, rate=5)
+            print(f"Piezo voltage set to: {voltage} V")
+        except Exception as e:
+            print(f"Error setting piezo voltage: {e}")
+
+    def update_spinbox_with_current_voltage(self):
+        """Periodically update the spinbox with the current piezo voltage."""
+        try:
+            current_voltage = self.DAC.get_piezo_v()
+            self.spinbox.var.set(f"{current_voltage:.3f}")  # Update the spinbox's StringVar directly
+        except Exception as e:
+            print(f"Error reading piezo voltage: {e}")
+
+        # Schedule the next update after 1 second (1000 ms)
+        self.after(1000, self.update_spinbox_with_current_voltage)
+

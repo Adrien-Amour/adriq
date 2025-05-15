@@ -17,7 +17,7 @@ setup(
     packages=find_packages(),
     include_package_data=True,
     package_data={
-        'adriq': ['DLL_32bit/*.dll', 'DLL_64bit/*.dll', 'resources/*'],
+        'adriq': ['QUTAU_DLL_32bit/*.dll', 'QUTAU_DLL_64bit/*.dll', 'WM_SCL_DLL/*.dll', 'resources/*'],
     },
     install_requires=[
         # List any dependencies here

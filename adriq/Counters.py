@@ -1,10 +1,7 @@
 # Standard library imports
 import time
 import threading
-import random
-import warnings
-import pickle
-import socket
+import csv
 from datetime import datetime
 from collections import Counter
 import configparser
@@ -20,7 +17,7 @@ from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.ticker import MaxNLocator
 from PyQt5.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QLabel, QPushButton, QHBoxLayout,  QFrame
-from PyQt5.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget, QLabel, QPushButton, QCheckBox, QHBoxLayout, QScrollArea
+from PyQt5.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget, QLabel, QPushButton, QCheckBox, QHBoxLayout, QScrollArea, QFileDialog
 from PyQt5.QtWidgets import QSpinBox
 import pyqtgraph as pg
 from PyQt5.QtCore import QTimer
@@ -93,6 +90,7 @@ class PMT_Reader:
         self.counting = True
         print("Counting started...")
         threading.Thread(target=self._counting_loop, daemon=True).start()
+        return True
 
     def _counting_loop(self):
         while self.counting:
@@ -109,6 +107,7 @@ class PMT_Reader:
 
     def stop_counting(self):
         self.counting = False
+        return True
 
     def get_counts(self):
         with self.lock:  # Ensure thread-safe access
@@ -331,22 +330,31 @@ class QuTau_Reader:
 
 
     def start_counting(self):
-        print ("Counting started.")
-        if self.current_mode in ["experiment", "rf_correlation"]:
-            print("Cannot start counting in experiment or RF correlation mode.")
-            return
+        if self.current_mode == "idle":
+            print(self.current_mode)
+            print ("Counting started.")
+            if self.current_mode in ["experiment", "rf_correlation"]:
+                print("Cannot start counting in experiment or RF correlation mode.")
+                return
 
-        self.counts = {ch.number: [] for ch in self.channels if ch.mode in ["signal-f", "signal-sp"]}
-        self.enter_counting_mode()
-        threading.Thread(target=self._counting_loop, daemon=True).start()
+            self.counts = {ch.number: [] for ch in self.channels if ch.mode in ["signal-f", "signal-sp"]}
+            self.enter_counting_mode()
+            threading.Thread(target=self._counting_loop, daemon=True).start()
+            return True
+        else:
+            return False
 
     def stop_counting(self):
-        print("Counting stopped.")
-        for ch in self.channels:
-            if ch.mode in ["signal-f", "signal-sp"]:
-                ch.counts = []
-        self.times = []  # Clear times array
-        self.enter_idle_mode()
+        if self.current_mode == "counting":
+            print("Counting stopped.")
+            for ch in self.channels:
+                if ch.mode in ["signal-f", "signal-sp"]:
+                    ch.counts = []
+            self.times = []  # Clear times array
+            self.enter_idle_mode()
+            return True
+        else:
+            return False
 
     def count_rate(self):
         # Get the latest timestamps and filter trailing zeros
@@ -739,11 +747,11 @@ class LivePlotter(QWidget):
     def __init__(self, count_reader):
         super().__init__()
         self.count_reader_client = Client(count_reader)
-
+ 
         # Set up main layout
         self.layout = QVBoxLayout()
         self.setLayout(self.layout)
-
+ 
         # Plot widget setup
         self.plot_widget = pg.PlotWidget()
         self.plot_widget.setBackground('k')  # Dark background
@@ -753,56 +761,65 @@ class LivePlotter(QWidget):
         self.plot_widget.getAxis('left').tickFont = pg.QtGui.QFont('Arial', 14)
         self.plot_widget.getAxis('bottom').tickFont = pg.QtGui.QFont('Arial', 14)
         self.layout.addWidget(self.plot_widget)
-
+ 
         # Label for displaying current count rate
         self.label = QLabel("Current Count Rate: N/A")
         self.label.setStyleSheet("color: red; font-size: 16pt;")
         self.layout.addWidget(self.label)
-
+ 
         # Control buttons and rate spinbox layout
         self.rate_layout = QHBoxLayout()
         self.layout.addLayout(self.rate_layout)
-
+ 
         self.update_rate_btn = QPushButton("Update Rate")
         self.update_rate_btn.setStyleSheet("font-size: 16pt; padding: 10px 20px;")
         self.update_rate_btn.clicked.connect(self.update_rate)
         self.rate_layout.addWidget(self.update_rate_btn)
-
+ 
         self.rate_spinbox = QSpinBox()
         self.rate_spinbox.setRange(1, 1000)  # Set appropriate range for rate
         self.rate_spinbox.setValue(self.get_rate())  # Initialize with current rate
         self.rate_spinbox.setStyleSheet("font-size: 16pt; padding: 10px 20px;")
         self.rate_spinbox.valueChanged.connect(self.set_rate)
         self.rate_layout.addWidget(self.rate_spinbox)
-
+ 
         self.control_layout = QHBoxLayout()
         self.layout.addLayout(self.control_layout)
-
+ 
         self.count_button = QPushButton("Start Counting")
         self.count_button.setStyleSheet("font-size: 16pt; padding: 10px 20px; background-color: green; color: white;")
         self.count_button.clicked.connect(self.toggle_counting)
         self.control_layout.addWidget(self.count_button)
-
+ 
         self.pause_button = QPushButton("Pause Plot")
         self.pause_button.setStyleSheet("font-size: 16pt; padding: 10px 20px; background-color: red; color: white;")
         self.pause_button.clicked.connect(self.toggle_pause)
         self.control_layout.addWidget(self.pause_button)
-
+ 
+        # New 'Start Log' button
+        self.start_log_button = QPushButton("Start Log")
+        self.start_log_button.setStyleSheet("font-size: 16pt; padding: 10px 20px; background-color: blue; color: white;")
+        self.start_log_button.clicked.connect(self.start_log)
+        self.control_layout.addWidget(self.start_log_button)
+ 
         # Timer and plotting data
         self.update_interval = 1000 // self.get_rate()  # Initial interval in ms
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_plot)
         self.timer.start(self.update_interval)
-
+ 
         self.times = []
         self.counts = []
         self.is_paused = False
         self.is_counting = self.count_reader_client.get_counting()
         self.colors = ['w', 'r', 'g', 'b', 'y', 'c', 'm']  # List of colors to cycle through
-
+        self.is_logging = False  # To track if logging is active
+        self.log_file = None  # To store log file reference
+        self.log_writer = None  # To store the CSV writer
+ 
         # Initialize counting button state
         self.update_count_button_state()
-
+ 
         # Create checkboxes for each channel in a scroll area
         self.scroll_area = QScrollArea()
         self.scroll_area.setWidgetResizable(True)
@@ -812,6 +829,45 @@ class LivePlotter(QWidget):
         self.layout.addWidget(self.scroll_area)
         self.channel_checkboxes = {}
         self.create_channel_checkboxes()
+ 
+    def start_log(self):
+        """Start logging count rates to a file."""
+        if self.is_logging:
+            self.stop_log()
+            return
+
+        # Ask the user for a filename to save the log
+        filename, _ = QFileDialog.getSaveFileName(self, "Save Log", "", "CSV Files (*.csv)")
+
+        if filename:
+            self.is_logging = True
+            self.log_file = open(filename, 'w', newline='')
+            log_writer = csv.writer(self.log_file)
+            log_writer.writerow(["Time"] + list(self.channel_checkboxes.keys()))  # Write header
+            print(f"Logging started. Data will be saved to {filename}")
+
+            # Save the writer for future use
+            self.log_writer = log_writer
+
+            # Update button appearance
+            self.start_log_button.setText("Stop Log")
+            self.start_log_button.setStyleSheet("font-size: 16pt; padding: 10px 20px; background-color: purple; color: white;")
+
+ 
+    def stop_log(self):
+        """Stop logging and close the file."""
+        if self.is_logging:
+            self.is_logging = False
+            if self.log_file:
+                self.log_file.close()
+            self.log_writer = None
+            self.log_file = None
+            print("Logging stopped.")
+
+            # Update button appearance
+            self.start_log_button.setText("Start Log")
+            self.start_log_button.setStyleSheet("font-size: 16pt; padding: 10px 20px; background-color: blue; color: white;")
+
 
     def create_channel_checkboxes(self):
         """Create checkboxes for each channel."""
@@ -821,15 +877,6 @@ class LivePlotter(QWidget):
             checkbox.setChecked(True)
             self.checkbox_layout.addWidget(checkbox)
             self.channel_checkboxes[label] = checkbox
-
-    def update_count_button_state(self):
-        """Update the state of the counting button based on the server's counting status."""
-        if self.is_counting:
-            self.count_button.setText("Stop Counting")
-            self.count_button.setStyleSheet("font-size: 16pt; padding: 10px 20px; background-color: red; color: white;")
-        else:
-            self.count_button.setText("Start Counting")
-            self.count_button.setStyleSheet("font-size: 16pt; padding: 10px 20px; background-color: green; color: white;")
 
     def set_rate(self, new_rate):
         """Send a command to set the new rate in the PMT_Reader."""
@@ -866,38 +913,63 @@ class LivePlotter(QWidget):
     def toggle_counting(self):
         """Toggle counting on or off."""
         if self.is_counting:
-            self.count_reader_client.stop_counting()
+            toggle = self.count_reader_client.stop_counting()
         else:
-            self.count_reader_client.start_counting()
+            toggle = self.count_reader_client.start_counting()
 
-        self.is_counting = not self.is_counting
-        self.update_count_button_state()
+        if toggle:
+            self.is_counting = not self.is_counting
+            self.update_count_button_state()
 
     def update_plot(self):
         """Update the plot with the latest counts."""
         try:
-            data = self.count_reader_client.get_counts()
-            if not data:
-                print("No data received from server.")
-                return
+            counting = self.count_reader_client.get_counting()
+            if counting != self.is_counting:
+                self.is_counting = counting
+                self.update_count_button_state()
+            
+            if self.is_counting and not self.is_paused:
+                data = self.count_reader_client.get_counts()
+                
 
-            times, counts = data
 
-            self.times = [time.timestamp() for time in times]
+                if not data:
+                    print("No data received from server.")
+                    return
 
-            # Update plot
-            self.plot_widget.clear()
-            for i, (label, count_values) in enumerate(counts.items()):
-                if self.channel_checkboxes[label].isChecked():
-                    color = self.colors[i % len(self.colors)]  # Cycle through colors
-                    self.plot_widget.plot(self.times, count_values, pen=pg.mkPen(color, width=2), name=label)
+                times, counts = data
 
-            # Update the current count rate label
-            if counts and any(counts.values()):
-                current_rate = [count_values[-1] for count_values in counts.values()]
-                self.label.setText(f"Current Count Rate: {current_rate} counts/s")
-            else:
-                self.label.setText("Current Count Rate: N/A")
+                self.times = [time.timestamp() for time in times]
 
+                # Update plot
+                self.plot_widget.clear()
+                for i, (label, count_values) in enumerate(counts.items()):
+                    if self.channel_checkboxes[label].isChecked():
+                        color = self.colors[i % len(self.colors)]  # Cycle through colors
+                        self.plot_widget.plot(self.times, count_values, pen=pg.mkPen(color, width=2), name=label)
+
+                # Update the current count rate label
+                if counts and any(counts.values()):
+                    current_rate = [count_values[-1] for count_values in counts.values()]
+                    self.label.setText(f"Current Count Rate: {current_rate} counts/s")
+                else:
+                    self.label.setText("Current Count Rate: N/A")
+
+                # Log the data if logging is active
+                if self.is_logging:
+                    log_data = [times[-1].timestamp()] + [counts[channel][-1] for channel in self.channel_checkboxes.keys()]
+                    self.log_writer.writerow(log_data)
+                
+    
         except Exception as e:
             print(f"Error updating plot: {e}")
+ 
+    def update_count_button_state(self):
+        """Update the state of the counting button based on the server's counting status."""
+        if self.is_counting:
+            self.count_button.setText("Stop Counting")
+            self.count_button.setStyleSheet("font-size: 16pt; padding: 10px 20px; background-color: red; color: white;")
+        else:
+            self.count_button.setText("Start Counting")
+            self.count_button.setStyleSheet("font-size: 16pt; padding: 10px 20px; background-color: green; color: white;")
