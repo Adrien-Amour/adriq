@@ -196,7 +196,7 @@ class Redlabs_DAC:
         if np.abs(voltage) > 10:
             raise ValueError("PI lock voltage is out of range. Must be between -10 and 10.")
         else:
-            self.write_analog_voltage(self.PI_lock_chan, voltage)
+            self.write_analog_voltage(self.PI_lock_chan, voltage, Verbose=False)
             self.PI_lock_v = voltage
 
     def show_ul_error(self, error):
@@ -653,11 +653,14 @@ class PiezoControlPanel(tk.Frame):
     def update_spinbox_with_current_voltage(self):
         """Periodically update the spinbox with the current piezo voltage."""
         try:
-            current_voltage = self.DAC.get_piezo_v()
-            self.spinbox.var.set(f"{current_voltage:.3f}")  # Update the spinbox's StringVar directly
+            # Only update if the spinbox does NOT have focus
+            if self.spinbox.focus_get() != self.spinbox:
+                current_voltage = self.DAC.get_piezo_v()
+                self.spinbox.var.set(f"{current_voltage:.3f}")  # Update the spinbox's StringVar directly
         except Exception as e:
             print(f"Error reading piezo voltage: {e}")
 
         # Schedule the next update after 1 second (1000 ms)
         self.after(1000, self.update_spinbox_with_current_voltage)
+
 

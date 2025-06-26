@@ -11,11 +11,61 @@ import nidaqmx
 import time
 import keyboard
 from tqdm import tqdm
-
 import configparser
 import os
 
 
+import inspect
+import csv
+from datetime import datetime
+
+def file_name(directory=r"C:\Users\probe\OneDrive - University of Sussex\Desktop\Data", base_name=None):
+    import os, inspect
+    from datetime import datetime
+    script_name = os.path.splitext(os.path.basename(inspect.stack()[-1].filename))[0]
+    date_time = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"{script_name}_{date_time}.csv"
+    if base_name is None:
+        filename = f"{script_name}_{date_time}.csv"
+    else:
+        filename = f"{script_name}_{base_name}_{date_time}.csv"
+        
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+        return os.path.join(directory, filename)
+    return filename
+
+def save_data(filepath, **data_points):
+    file_exists = os.path.exists(filepath)
+    with open(filepath, mode='a', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=data_points.keys())
+        if not file_exists:
+            writer.writeheader()
+        writer.writerow(data_points)
+    print(f"Appended data to {filepath}")
+
+
+def save_array_data(filepath, **arrays):
+    """
+    Save multiple arrays as columns to a CSV file.
+    Each keyword argument becomes a column.
+    All arrays must be the same length.
+    """
+    import csv, os
+
+    # Get fieldnames and check array lengths
+    fieldnames = list(arrays.keys())
+    lengths = [len(arr) for arr in arrays.values()]
+    if len(set(lengths)) != 1:
+        raise ValueError("All arrays must have the same length.")
+
+    file_exists = os.path.exists(filepath)
+    with open(filepath, mode='a', newline='') as f:
+        writer = csv.writer(f)
+        if not file_exists:
+            writer.writerow(fieldnames)
+        for i in range(lengths[0]):
+            writer.writerow([arrays[field][i] for field in fieldnames])
 
 class DDS_Singletone:
     PLL_MULTIPLIER = 40
@@ -685,6 +735,34 @@ class Experiment_Builder:
                         np.full_like(fractional_power_array, dds.frequency)
                     )
                     dds.amplitude_array.extend(amplitude_values)
+                    # Plot fractional_power_array and amplitude_values (both normalized)
+                    if np.max(fractional_power_array) != 0 and np.max(amplitude_values) != 0:
+                        # Find the transition from 0 to nonzero in amplitude_values
+                        for i in range(1, len(amplitude_values)):
+                            if amplitude_values[i-1] == 0 and amplitude_values[i] != 0:
+                                print(f"Jump detected for {key} in section '{section['name']}':")
+                                print(f"  fractional_power_array[i-1]={fractional_power_array[i-1]}, amplitude_values[i-1]={amplitude_values[i-1]}")
+                                print(f"  fractional_power_array[i]={fractional_power_array[i]}, amplitude_values[i]={amplitude_values[i]}")
+                                break  # Remove this break if you want to find all such jumps
+
+                        # plt.figure(figsize=(8, 4))
+                        # plt.plot(
+                        #     np.array(time_array) - current_time, 
+                        #     np.array(fractional_power_array) / np.max(fractional_power_array), 
+                        #     label="Fractional Power (normalized)"
+                        # )
+                        # plt.plot(
+                        #     np.array(time_array) - current_time, 
+                        #     np.array(amplitude_values) / np.max(amplitude_values), 
+                        #     label="Amplitude (normalized)"
+                        # )
+                        # plt.title(f"{key} - Section: {section['name']}")
+                        # plt.xlabel("Time (relative, µs)")
+                        # plt.ylabel("Normalized Value")
+                        # plt.legend()
+                        # plt.tight_layout()
+                        # plt.show()
+
             # Update current time to the end of this section
             current_time += effective_playback_length
         end_time = time.time()
@@ -925,6 +1003,11 @@ class Experiment_Runner:
 
         self.pmt_counts = 0
         
+        #Experiment Settings that you may sometimes want to change
+        self.experiment_trap_depth = 1.0
+        self.load_trap_depth = 0.8
+
+
         self.trigger_mode = trigger_mode  # Trigger mode for the experiment
 
         # Initialize other parts of the experiment as before
@@ -972,7 +1055,8 @@ class Experiment_Runner:
         """
         if self.calibrated_fluoresence is False:
             # Put DDS in trapping mode
-
+            for dds in self.dds_dictionary.values():
+                dds.exit_trapping_mode()
             #Check counting
             counting = self.pmt_reader_client.get_counting()
             if not counting:
@@ -1036,7 +1120,7 @@ class Experiment_Runner:
         for dds in self.dds_dictionary.values():
             dds.enter_trapping_mode()
 
-        self.redlabs_dac_client.set_trap_depth(0.8)
+        self.redlabs_dac_client.set_trap_depth(self.load_trap_depth)
 
         start_time = time.time()
         rate = self.pmt_reader_client.get_rate()
@@ -1072,11 +1156,11 @@ class Experiment_Runner:
         # Reset the DAC pins
         for dds in self.dds_dictionary.values():
             dds.exit_trapping_mode()
-        self.redlabs_dac_client.set_trap_depth(1.2)
+        self.redlabs_dac_client.set_trap_depth(self.experiment_trap_depth)
         
         self.catching = False
 
-    def load_loop(self, N_attempts=5):
+    def load_loop(self, N_attempts=10):
         """
         This method will attempt to load single ions into the trap for a maximum of N_attempts. If it loads something, it will run
         a single ion check to verify that only one ion is loaded. If this fails, it will open the trap try again.
@@ -1119,7 +1203,7 @@ class Experiment_Runner:
         except Exception as e:
             print(f"Failed to initialize digital pins: {e}")
             return
-        self.redlabs_dac_client.set_trap_depth(0.8)
+        self.redlabs_dac_client.set_trap_depth(self.load_trap_depth)
         self.loading = True
         rate = self.pmt_reader_client.get_rate()
         trapped = False
@@ -1150,7 +1234,7 @@ class Experiment_Runner:
         """
         if not self.expected_fluorescence:
             return True
-        else:
+        else:        
             for attempt in range(5):
                 counts = self.pmt_reader_client.get_counts()
                 counts = counts[1]['PMT']
@@ -1161,7 +1245,7 @@ class Experiment_Runner:
                 print(avg_counts)
                 if lower_bound <= avg_counts <= upper_bound:
                     print(f"Recent PMT counts ({avg_counts}) within 10% of expected fluorescence ({self.expected_fluorescence}). Single Ion Check Passed.")
-                    self.redlabs_dac_client.set_trap_depth(1.2)
+                    self.redlabs_dac_client.set_trap_depth(self.experiment_trap_depth)
                     return True
                 else:
                     print(f"Recent PMT counts ({avg_counts}) not within 10% of expected fluorescence ({self.expected_fluorescence}). Retrying ({attempt + 1}/5)...")
@@ -1169,7 +1253,7 @@ class Experiment_Runner:
             print(f"Failed to get PMT counts within 20% of expected fluorescence after 5 attempts.")
             self.redlabs_dac_client.set_trap_depth(0)
             time.sleep(1)
-            self.redlabs_dac_client.set_trap_depth(0.8)
+            self.redlabs_dac_client.set_trap_depth(self.load_trap_depth)
             return False
         
     def stop_load(self):
@@ -1182,12 +1266,24 @@ class Experiment_Runner:
         except Exception as e:
             print(f"Failed to reset DAC pins: {e}")
 
-    def start_experiment(self, N=None):
+    def start_experiment(self, N=None, raw_file_name=None):
         self.N = N  # Remember N for resuming
+        if raw_file_name:
+            self.file_name = file_name(
+                    directory=r"C:\Users\probe\OneDrive - University of Sussex\Desktop\Raw_Data",
+                    base_name=f"{raw_file_name}"
+                )
+        else:
+            self.file_name = None
+
         self.N_Valid_Pulses = 0  # This variable keeps track of the true number of cycles run, i.e., the number of pulse sequences run whilst the ion is nicely trapped
         self.N_Total_Pulses = 0
-        self.redlabs_dac_client.set_trap_depth(1.2)  # Set trap depth to 0.8V
+        self.redlabs_dac_client.set_trap_depth(self.experiment_trap_depth)
         # Check ion status before starting the calibration run
+        for dds in self.dds_dictionary.values():
+            dds.exit_trapping_mode()
+
+            
         ion_status = self.check_ion()
         if not ion_status:
             print("Ion check failed. Attempting to catch ion...")
@@ -1199,15 +1295,12 @@ class Experiment_Runner:
                     self.running = False
                     self.pause_experiment()
                     return
-
-        for dds in self.dds_dictionary.values():
-            dds.exit_trapping_mode()
         
         self.clear_channels()
         self.iteration = 0
         self.qutau_reader.enter_experiment_mode()
+        self.qutau_reader.qutau.getLastTimestamps(True) # clear buffer
         self.calibrate_run_time()  # Calibrate run time on the first run
-        self.iteration += 1  # Increment iteration after calibration run
         self.process_data()
         laser_status, ion_status, cavity_status = self.run_diagnostics()
         # Continue the experiment if diagnostics passed
@@ -1311,6 +1404,12 @@ class Experiment_Runner:
     def process_data(self):
         """Handle data processing."""
         self.qutau_reader.get_data()
+        start_time = time.time()
+        if self.file_name:
+            save_array_data(self.file_name, channels = self.qutau_reader.tchannel, timestamps=self.qutau_reader.tstamp)
+        end_time = time.time()
+        print(f"Latency for saving data: {end_time - start_time:.6f} seconds")
+
         # here we filter data to remove runs where the ion was not trapped.
 
         pulse_sequence_length = self.pulse_sequencer.sequence_length * 1E-6
@@ -1462,7 +1561,7 @@ class Experiment_Runner:
         # Collect time differences for each channel
         for channel in channels:
             time_diffs_us = np.array(channel.time_diffs) * 1E6  # Convert to NumPy array and multiply by 1E6
-            print(np.sort(time_diffs_us))
+            #print(np.sort(time_diffs_us))
             # Apply lower cutoff if specified
             if lower_cutoff is not None:
                 time_diffs_us = time_diffs_us[time_diffs_us >= lower_cutoff]
@@ -1533,6 +1632,7 @@ class Experiment_Runner:
 
         # Get counts for each channel
         for channel in channels:
+            print(channel.name)
             time_diffs_us = np.array(channel.time_diffs) * 1E6  # Convert to NumPy array and multiply by 1E6
             
             # Apply lower cutoff if specified

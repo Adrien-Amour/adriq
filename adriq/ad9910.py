@@ -687,7 +687,7 @@ def start_ram(Port, Board, Verbose=False):
 def interpolate_rf_power(calibration_file, frac, output_frequency):
     if frac > 1:
         raise ValueError("RF Output too high")
-    if frac < 1E-5:
+    if frac < 1E-8:
         return 0,0
     else:
         # Load the calibration file
@@ -725,6 +725,7 @@ def interpolate_rf_power(calibration_file, frac, output_frequency):
         else:
             rf_power_frac = np.interp(output_frequency, [low_freq, high_freq], [rf_power_low, rf_power_high])
 
+
         if rf_power_frac > 1:
             raise ValueError("RF Output too high")
     return int(rf_power_frac * Max_RF_Power), Optical_Power_Output
@@ -756,8 +757,8 @@ def interpolate_rf_power_array(calibration_file, frac_array, frequency_array):
     # Initialize results
     rf_power_output = np.zeros_like(frac_array, dtype=int)
 
-    for i, (frac, freq) in enumerate(zip(Optical_Power_Output, frequency_array)):
-        if frac < 1E-5:
+    for i, (opt_power, freq) in enumerate(zip(Optical_Power_Output, frequency_array)):
+        if opt_power/Max_Optical_Power < 1E-8:
             rf_power_output[i] = 0
         else:
             # Find the indices of the two frequencies closest to the target frequency
@@ -771,9 +772,8 @@ def interpolate_rf_power_array(calibration_file, frac_array, frequency_array):
             high_power_data = optical_power_data[high_idx]
 
             # Interpolate the RF power fraction
-            rf_power_low = np.interp(frac, low_power_data, rf_power_fractions)
-            rf_power_high = np.interp(frac, high_power_data, rf_power_fractions)
-
+            rf_power_low = np.interp(opt_power, low_power_data, rf_power_fractions)
+            rf_power_high = np.interp(opt_power, high_power_data, rf_power_fractions)
             if low_freq == high_freq:
                 rf_power_frac = rf_power_low
             else:
@@ -785,7 +785,6 @@ def interpolate_rf_power_array(calibration_file, frac_array, frequency_array):
             rf_power_output[i] = int(rf_power_frac * Max_RF_Power)
 
     return rf_power_output, Optical_Power_Output
-
 
 class Laser:
     PLL_MULTIPLIER = 40
