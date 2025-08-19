@@ -276,83 +276,70 @@ def filter_runs(
     return filtered_tstamp[:count], filtered_tchannel[:count], valid_pulse_count, total_pulses
 
 
-
 def find_n_photon_events(
     np.ndarray[np.float64_t, ndim=1] tstamp,
     np.ndarray[np.int64_t, ndim=1] tchannel,
     int trig_chan,
     np.ndarray[np.int64_t, ndim=1] photon_chans,
     np.ndarray[np.float64_t, ndim=2] photon_windows,
-    double timebase
 ):
-    """
-    Finds N-photon events within each pulse sequence based on predefined photon windows.
-
-    Parameters:
-        tstamp (np.ndarray[np.float64_t, ndim=1]): Array of event timestamps.
-        tchannel (np.ndarray[np.int64_t, ndim=1]): Array of event channels.
-        trig_chan (int): Channel indicating the start of a pulse.
-        photon_chans (np.ndarray[np.int64_t, ndim=1]): Array of photon channels to consider.
-        photon_windows (np.ndarray[np.float64_t, ndim=2]): Array of shape (N, 2) defining start and end times for each photon window.
-        timebase (double): Timebase to convert clock cycles to time.
-
-    Returns:
-        List[Dict]: A list of dictionaries, each containing:
-            - 'pulse_number': The pulse number.
-            - 'timestamps': List of photon timestamps (adjusted by pulse start time).
-            - 'channels': List of photon channels.
-            - 'windows': List of tuples (start_time, end_time) for each photon window.
-    """
-    cdef int i, pulse_index = -1
+    cdef int i, j, pulse_index = -1
     cdef double current_trigger_time = -1.0, next_trigger_time = -1.0
     cdef int n = tstamp.shape[0]
     cdef int num_windows = photon_windows.shape[0]
     cdef list n_photon_events = []
-    cdef list photon_timestamps, photon_channels, photon_windows_used
-    cdef np.ndarray[np.int8_t, ndim=1] window_flags = np.zeros(num_windows, dtype=np.int8)  # Use int8 for boolean flags
+    cdef list photon_timestamps = []
+    cdef list photon_channels = []
+    cdef list photon_windows_used = []
+    cdef np.ndarray[np.int8_t, ndim=1] window_flags = np.zeros(num_windows, dtype=np.int8)
+    cdef int64_t chan
+    cdef double ts, relative_time, window_start, window_end
 
-    # Loop through all events
+    # Precompute photon_chans set for fast lookup
+    photon_chan_set = set([int(x) for x in photon_chans])
+
     for i in range(n):
-        if tchannel[i] == trig_chan:
-            # Start a new pulse when a trigger is encountered
-            pulse_index += 1
-            current_trigger_time = tstamp[i]
-            next_trigger_time = current_trigger_time + photon_windows[-1, 1] / timebase
+        chan = tchannel[i]
+        ts = tstamp[i]
 
-            # Reset photon tracking for the new pulse
-            photon_timestamps = []
-            photon_channels = []
-            photon_windows_used = []
-            window_flags[:] = 0  # Reset window flags
-
-        elif current_trigger_time != -1.0 and tchannel[i] in photon_chans:
-            # Check if the event is within the current pulse window
-            if tstamp[i] < next_trigger_time:
-                # Calculate the time relative to the pulse start
-                relative_time = (tstamp[i] - current_trigger_time) * timebase
-
-                # Determine which window this photon belongs to
+        # Process photon events first
+        if current_trigger_time != -1.0 and chan in photon_chan_set:
+            if ts < next_trigger_time:
+                relative_time = ts - current_trigger_time
                 for j in range(num_windows):
-                    window_start, window_end = photon_windows[j]
+                    window_start = photon_windows[j, 0]
+                    window_end = photon_windows[j, 1]
                     if window_start <= relative_time < window_end:
-                        if window_flags[j] == 0:  # First photon in the window
+                        if window_flags[j] == 0:
                             photon_timestamps.append(relative_time)
-                            photon_channels.append(tchannel[i])
+                            photon_channels.append(chan)
                             photon_windows_used.append((window_start, window_end))
-                            window_flags[j] = 1  # Mark the window as satisfied
+                            window_flags[j] = 1
                         else:
-                            # If a second photon is detected in the same window, invalidate the sequence
-                            return None  # Or break out of the loop to skip this pulse sequence
+                            # Invalidate this pulse sequence
+                            photon_timestamps = []
+                            photon_channels = []
+                            photon_windows_used = []
+                            window_flags[:] = 0
                         break
 
-        # Check if we have an N-photon event at the end of the pulse
-        if tchannel[i] == trig_chan or i == n - 1:
-            if all(window_flags):  # Ensure all windows have exactly one photon
+        # Check for end of pulse (trigger or last event)
+        if chan == trig_chan or i == n - 1:
+            if all(window_flags):
                 n_photon_events.append({
                     'pulse_number': pulse_index,
-                    'timestamps': photon_timestamps,
-                    'channels': photon_channels,
-                    'windows': photon_windows_used
+                    'timestamps': photon_timestamps[:],
+                    'channels': photon_channels[:],
+                    'windows': photon_windows_used[:]
                 })
+            # Prepare for next pulse if this is a trigger
+            if chan == trig_chan:
+                pulse_index += 1
+                current_trigger_time = ts
+                next_trigger_time = current_trigger_time + photon_windows[-1, 1]
+                photon_timestamps = []
+                photon_channels = []
+                photon_windows_used = []
+                window_flags[:] = 0
 
     return n_photon_events

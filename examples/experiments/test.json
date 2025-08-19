@@ -1,0 +1,97 @@
+{
+    "experiment_name": "test",
+    "created_date": "2025-08-05T15:02:55",
+    "section_order": [
+        "cooling",
+        "Trapping",
+        "Raman"
+    ],
+    "sections": {
+        "cooling": {
+            "397a": {
+                "detuning": -18.0,
+                "power_fraction": 0.002
+            },
+            "397c": {
+                "detuning": -18.0,
+                "power_fraction": 0.1
+            },
+            "850 RP": {
+                "detuning": 0.0,
+                "power_fraction": 0.2
+            },
+            "854 Cav": {
+                "detuning": 0.0,
+                "power_fraction": 0.1
+            },
+            "854 SP1": {
+                "detuning": 0.0,
+                "power_fraction": 0.15
+            },
+            "850 SP1": {
+                "detuning": 0.0,
+                "power_fraction": 0.1
+            }
+        },
+        "Trapping": {
+            "397a": {
+                "detuning": -50.0,
+                "power_fraction": 0.003
+            },
+            "397c": {
+                "detuning": -48.0,
+                "power_fraction": 0.4
+            },
+            "850 RP": {
+                "detuning": 0.0,
+                "power_fraction": 0.3
+            },
+            "854 Cav": {
+                "detuning": 0.0,
+                "power_fraction": 0.1
+            },
+            "854 SP1": {
+                "detuning": 0.0,
+                "power_fraction": 0.1
+            },
+            "850 SP1": {
+                "detuning": 0.0,
+                "power_fraction": 0.1
+            }
+        },
+        "Raman": {
+            "397a": {
+                "detuning": -18.0,
+                "power_fraction": 0.002
+            },
+            "397c": {
+                "detuning": -18.0,
+                "power_fraction": 0.3
+            },
+            "866 OP": {
+                "detuning": 0.0,
+                "power_fraction": 0.2
+            },
+            "850 RP": {
+                "detuning": 0.0,
+                "power_fraction": 0.2
+            },
+            "854 Cav": {
+                "detuning": 0.0,
+                "power_fraction": 0.1
+            },
+            "854 SP1": {
+                "detuning": 0.0,
+                "power_fraction": 0.15
+            },
+            "850 SP1": {
+                "detuning": 50.0,
+                "power_fraction": 0.005
+            },
+            "850 SP2": {
+                "detuning": 18.0,
+                "power_fraction": 0.005
+            }
+        }
+    }
+}

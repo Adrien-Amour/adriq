@@ -42,7 +42,7 @@ def save_data(filepath, **data_points):
         if not file_exists:
             writer.writeheader()
         writer.writerow(data_points)
-    print(f"Appended data to {filepath}")
+    #print(f"Appended data to {filepath}")
 
 
 def save_array_data(filepath, **arrays):
@@ -58,7 +58,7 @@ def save_array_data(filepath, **arrays):
     lengths = [len(arr) for arr in arrays.values()]
     if len(set(lengths)) != 1:
         raise ValueError("All arrays must have the same length.")
-
+    print(filepath)
     file_exists = os.path.exists(filepath)
     with open(filepath, mode='a', newline='') as f:
         writer = csv.writer(f)
@@ -355,7 +355,7 @@ def load_dds_dict(mode: str, dds_config: str):
     return dds_dict
 
 class Pulse_Sequencer:
-    def __init__(self, port="COM5", ram_start_pin = 4, ps_end_pin=2, pmt_gate_pin=1, ps_sync_pin=0):
+    def __init__(self, port="COM5", coincidence_det_pin = 5, ram_start_pin = 4, ps_end_pin=2, pmt_gate_pin=1, ps_sync_pin=0):
         """
         Initializes the PulseSequencer instance.
 
@@ -370,15 +370,21 @@ class Pulse_Sequencer:
         self.pmt_gate_pin = pmt_gate_pin
         self.ps_sync_pin = ps_sync_pin
         self.ram_start_pin = ram_start_pin
-        
+        self.coincidence_det_pin = coincidence_det_pin
+
         self._pulses = []  # Placeholder for pulse patterns
         self._pulse_lengths = []  # Placeholder for pulse durations
         self._new_pulses = []  # Placeholder for new pulse patterns
         self._new_pulse_lengths = []  # Placeholder for new pulse durations
+        self.optional_pulses = None
+        self.optional_pulse_lengths = None
         self.N_Cycles = 1  # Default number of cycles
         self.end_pulse = None  # Default end pulse
         self._new_end_pulse = None  # Placeholder for new end pulse
         self.gated_fraction = 0  # Fraction of time PMT is gated
+        self.measurement_window = 15
+        self.threshold_low = 0  # Low threshold for inputs TMR2 and TMR3 to trigger optional pulses
+        self.threshold_high = 0  # High threshold for inputs TMR2 and TMR3 to trigger optional pulses
 
     def start(self):
         """
@@ -435,7 +441,10 @@ class Pulse_Sequencer:
                 Pulse_Lengths=self._new_pulse_lengths,
                 Continuous=Continuous,
                 N_Cycles=self.N_Cycles,
-                End_Pulse=self._new_end_pulse
+                End_Pulse=self._new_end_pulse,
+                ThresholdLow=self.threshold_low,
+                ThresholdHigh=self.threshold_high,
+                Measurement_Window=self.measurement_window
             )
 
             # Replace the old pulses with the new pulses
@@ -447,6 +456,18 @@ class Pulse_Sequencer:
         self._new_pulses = []
         self._new_pulse_lengths = []
         self._new_end_pulse = None
+
+    def write_optional_sequence(self):
+        """
+        Writes an optional pulse to the pulse sequencer.
+        
+        Args:
+            pulse (str): A 16-bit string representing the optional pulse.
+        """
+        if self.optional_pulses is not None and self.optional_pulse_lengths is not None:
+            print(f"Writing optional pulse sequence to the pulse sequencer: {self.optional_pulses}")
+            print(f"Measurement Window: {self.measurement_window}")
+            write_optional_pulses(self.port, self.optional_pulses, self.optional_pulse_lengths)
 
 class Experiment_Builder:
     def __init__(self, dds_dictionary, pulse_sequencer, ram_step=0.02, N_Cycles=1E5):
@@ -464,6 +485,11 @@ class Experiment_Builder:
         self.N_Cycles = int(N_Cycles)  # Number of cycles for the pulse sequencer to run after start is called
         # Generate cooling pulse
         self.cooling_pulse = self._generate_pulse(state='cooling')
+
+        self.coincidence_low = None
+        self.coincidence_high = None
+        self.coincidence_section_index = None  # Index of the section where the coincidence detector is used``
+
 
         # Check for pin conflicts
         dds_pins = {dds.pulse_sequencer_pin for dds in dds_dictionary.values()}
@@ -614,7 +640,8 @@ class Experiment_Builder:
                 self.cooling_section['amplitudes'][key] = amplitude
                 self.DDS_Dictionary[key].edited = True
 
-    def create_section(self, name, duration, dds_functions, pmt_gate_high=False):
+    def create_section(self, name, duration, dds_functions, pmt_gate_high=False,
+                    coincidence_detector=False, coincidence_low=None, coincidence_high=None):
         for key in dds_functions:
             if key not in self.DDS_Dictionary:
                 raise ValueError(f"Unidentified DDS key: {key}")
@@ -632,12 +659,24 @@ class Experiment_Builder:
                     #if the sync value already dropped 
 
         section_functions = {key: dds_functions.get(key, lambda t: 0) for key in self.DDS_Dictionary}
+
+        if coincidence_detector:
+            if self.coincidence_section_index is not None:
+                raise ValueError("Only one section can have coincidence_detector=True.")
+            if coincidence_low is None or coincidence_high is None:
+                raise ValueError("coincidence_low and coincidence_high must be set if coincidence_detector=True.")
+            self.coincidence_section_index = len(self.playback_sections)
+            self.coincidence_low = coincidence_low
+            self.coincidence_high = coincidence_high
+            
         self.playback_sections.append({
             'name': name,
             'duration': duration,
             'functions': section_functions,
-            'pmt_gate_high': pmt_gate_high
+            'pmt_gate_high': pmt_gate_high,
+            'coincidence_detector': coincidence_detector
         })
+
 
     def load_section_from_preset(self, preset_path):
         """
@@ -857,7 +896,8 @@ class Experiment_Builder:
         # Construct the pulses and lengths for the pulse sequencer
         pulses = [self.cooling_pulse]
         pulse_lengths = [self.cooling_section['length']]
-        for section in self.playback_sections:
+
+        for idx, section in enumerate(self.playback_sections):
             pulse = self._generate_pulse(
                 state='playback',
                 pmt_gate_high=section['pmt_gate_high']
@@ -865,17 +905,29 @@ class Experiment_Builder:
             pulses.append(pulse)
             pulse_lengths.append(section['duration'])
 
+        if self.coincidence_section_index is not None:
+            self.pulse_sequencer.measurement_window = self.coincidence_section_index + 1 #1 for cooling section 
+            self.pulse_sequencer.threshold_low = self.coincidence_low
+            self.pulse_sequencer.threshold_high = self.coincidence_high
+            # Optional pulse: all 0 except coincidence_det_pin high, 4us
+            optional_pulse = ['0'] * 16
+            optional_pulse[self.pulse_sequencer.coincidence_det_pin] = '1'
+            optional_pulse_str = ''.join(optional_pulse)
+            optional_pulse_length = 4  # us
+            self.pulse_sequencer.optional_pulses = [optional_pulse_str]
+            self.pulse_sequencer.optional_pulse_lengths = [optional_pulse_length]
+
+
         # Debug prints for verification
         print(f"Pulses: {pulses}, End Pulse: {self.pulse_sequencer._new_end_pulse}")
         print(f"Pulse Lengths: {pulse_lengths}")
         self.pulse_sequencer._new_pulses = pulses
         self.pulse_sequencer._new_pulse_lengths = pulse_lengths
-        print(self.pulse_sequencer._new_pulses)
-        print(self.pulse_sequencer._new_pulse_lengths)
         #new end pulse already set in __init__
         self.pulse_sequencer.N_Cycles = self.N_Cycles
         # Write to the pulse sequencer
         self.pulse_sequencer.write_sequence(Continuous=Continuous)
+        self.pulse_sequencer.write_optional_sequence()  # Write optional pulse if set
 
 class Experiment_Builder_Singletone:
     def __init__(self, dds_dictionary, pulse_sequencer, N_Cycles=1E5):
@@ -1315,6 +1367,7 @@ class Experiment_Runner:
         else:
             self.save_data()
             self.iteration += 1  # Increment iteration after successful run
+            read_pulse_sequencer_results("COM5")
             self.experiment_loop()
 
     def calibrate_run_time(self):
@@ -1354,13 +1407,15 @@ class Experiment_Runner:
 
                 self.pulse_sequencer.start()
                 print(f"Waiting for input to go HIGH on {self.channel_name} for up to {self.timeout} seconds...")
-
+                start_time = time.time()
                 # Sleep for the calibrated run time
                 if self.run_time is not None:
                     time.sleep(self.run_time)
 
-                start_time = time.time()
+                if self.N is not None and self.iteration == self.N-1:
+                    time.sleep(1) # let the qutau buffer fill up to get all runs
 
+                    
                 while True:
                     input_state = self.task.read()
                     if input_state:
@@ -1379,6 +1434,7 @@ class Experiment_Runner:
                             else:
                                 self.save_data()
                                 self.iteration += 1  # Increment iteration after successful run
+                                read_pulse_sequencer_results("COM5")
 
                             break
 
@@ -1498,7 +1554,7 @@ class Experiment_Runner:
                 ch.counts = []
     
             if self.cavity_lock and hasattr(self, "dds_854_cav"):
-                self.dds_854_cav.set_profile(0, frequency=200, amplitude=2500, phase=0)
+                self.dds_854_cav.set_profile(0, frequency=200, amplitude=1500, phase=0)
                 self.dds_854_cav.flash()
                 time.sleep(0.03)  # Wait for the DDS to stabilize
                 self.qutau_reader.get_data()
@@ -1527,7 +1583,8 @@ class Experiment_Runner:
             if total_counts_signal_sp > 2000:  # Threshold value
                 print(f"Cavity lock check passed. Total counts: {total_counts_signal_sp}")
                 return True  # Return True if the threshold is met
-    
+            else:
+                print(f"Cavity lock check failed. Total counts: {total_counts_signal_sp}. Retrying ({attempt + 1}/5)...")
             # Reset counts after the attempt
             for ch in self.qutau_reader.channels:
                 ch.counts = []

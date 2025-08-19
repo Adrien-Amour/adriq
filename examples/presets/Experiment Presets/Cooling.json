@@ -1,0 +1,19 @@
+{
+  "duration": 6,
+  "dds_functions": {
+    "397c": {
+      "type": "constant",
+      "amplitude": 0.3
+    },
+    "854 SP1": {
+      "type": "constant",
+      "amplitude": 0.15
+    },
+    "850 RP": {
+      "type": "constant",
+      "amplitude": 0.2
+    }
+  },
+  "pmt_gate_high": false,
+  "description": "Ion cooling sequence"
+}

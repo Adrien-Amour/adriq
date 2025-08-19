@@ -18,7 +18,7 @@ def cfr1_bytes(
     Manual_OSK_External_Control=False,
     Autoclear_Digital_Ramp_Accumulator=False, Autoclear_Phase_Accumulator=False,
     Clear_Digital_Ramp_Accumulator=False, Clear_Phase_Accumulator=False,
-    Load_LRR_At_IO_Update=False, Load_ARR_At_IO_Update=False, OSK_Enable=False,
+    Load_LRR_At_IO_Update=False, Load_ARR_sAt_IO_Update=False, OSK_Enable=False,
     REF_CLK_Input_Power_Down=False, DAC_Power_Down=False, Select_Auto_OSK = False, Digital_Power_Down=False,
     Aux_DAC_Power_Down = False, External_Power_Down_Control=False, SDIO_Input_Only=True):
 

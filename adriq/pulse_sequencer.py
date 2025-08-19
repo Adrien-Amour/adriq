@@ -24,7 +24,10 @@ def pulse_out(Port, Bitstring, Verbose = False):
         ser.close()
         time.sleep(0.01)
     
-def write_pulse_sequencer(Port, Pulses, Pulse_Lengths, Continuous=False, N_Cycles=10000, End_Pulse='0000000000000001', Measurement_Window=1, Threshold_Counts=4, Clock_Frequency=80, Initial_Delay=80, Delay = 115, Final_Delay=185, Verbose = False):
+def write_pulse_sequencer(Port, Pulses, Pulse_Lengths, Continuous=False, N_Cycles=10000, End_Pulse='0000000000000001',
+                           Measurement_Window=1, ThresholdLow=-1, ThresholdHigh=-1, Clock_Frequency=80, Initial_Delay=76,
+                           Delay=115, Final_Delay=260, Verbose=False):
+
     # Check that Pulses is a list of 16-bit bit strings
     for pulse in Pulses:
         if not isinstance(pulse, str):
@@ -55,25 +58,34 @@ def write_pulse_sequencer(Port, Pulses, Pulse_Lengths, Continuous=False, N_Cycle
     if Measurement_Window < 0 or Measurement_Window > 0xFF:
         raise ValueError("Measurement_Window must be an 8-bit unsigned integer (0 <= Measurement_Window <= 255).")
     
-    # Check that Threshold_Counts is an 8-bit unsigned integer
-    if not isinstance(Threshold_Counts, int):
-        raise TypeError(f"Threshold_Counts must be an integer, got {type(Threshold_Counts).__name__}")
-    if Threshold_Counts < 0 or Threshold_Counts > 0xFF:
-        raise ValueError("Threshold_Counts must be an 8-bit unsigned integer (0 <= Threshold_Counts <= 255).")
+    if not isinstance(ThresholdLow, int):
+        raise TypeError(f"ThresholdLow must be an integer, got {type(ThresholdLow).__name__}")
+    if ThresholdLow < -32768 or ThresholdLow > 32767:
+        raise ValueError("ThresholdLow must be a 16-bit signed integer (-32768 <= ThresholdLow <= 32767).")
+    
+    if not isinstance(ThresholdHigh, int):
+        raise TypeError(f"ThresholdHigh must be an integer, got {type(ThresholdHigh).__name__}")
+    if ThresholdHigh < -32768 or ThresholdHigh > 32767:
+        raise ValueError("ThresholdHigh must be a 16-bit signed integer (-32768 <= ThresholdHigh <= 32767).")
+    
     
     N_Cycles_Bin = format(N_Cycles, '032b')
     Measurement_Window_Bin = format(Measurement_Window,'08b')
-    Threshold_Counts_Bin = format(Threshold_Counts,'08b')
     Length_Bin = format(len(Pulses), '08b')
     Length_Bin_2 = format(int(len(Pulses) // 10) + ((len(Pulses) / 10 ) % 1 > 0), '08b') #Weird thing from Matthias'firmware, don't know why its needed but don't question it
+    ThresholdLow_Bin = format(ThresholdLow & 0xFFFF, '016b')  # Convert to unsigned 16-bit
+    ThresholdHigh_Bin = format(ThresholdHigh & 0xFFFF, '016b')  # Convert to unsigned 16-bit
+    
     settings_string = [0] * 88
     settings_string[0:8] = '00000000' if Continuous else '00000001'
     settings_string[8:16] = Length_Bin
     settings_string[16:48] = N_Cycles_Bin
     settings_string[48:64] = End_Pulse
     settings_string[64:72] = Measurement_Window_Bin
-    settings_string[72:80] = Threshold_Counts_Bin
-    settings_string[80:88] = Length_Bin_2
+    settings_string[72:88] = ThresholdLow_Bin  # 16 bits
+    settings_string[88:104] = ThresholdHigh_Bin  # 16 bits
+    settings_string[104:112] = Length_Bin_2
+
     byte1 = int(''.join(map(str, settings_string[0:8])), 2)
     byte2 = int(''.join(map(str, settings_string[8:16])), 2)
     byte3 = int(''.join(map(str, settings_string[16:24])), 2)
@@ -85,9 +97,13 @@ def write_pulse_sequencer(Port, Pulses, Pulse_Lengths, Continuous=False, N_Cycle
     byte9 = int(''.join(map(str, settings_string[64:72])), 2)
     byte10 = int(''.join(map(str, settings_string[72:80])), 2)
     byte11 = int(''.join(map(str, settings_string[80:88])), 2)
+    byte12 = int(''.join(map(str, settings_string[88:96])), 2)
+    byte13 = int(''.join(map(str, settings_string[96:104])), 2)
+    byte14 = int(''.join(map(str, settings_string[104:112])), 2)
 
-    Settings_Bytes = [ord('w'), byte1, byte2, byte3, byte4, byte5, byte6, byte7, byte8, byte9, byte10, byte11]
+    Settings_Bytes = [ord('w'), byte1, byte2, byte3, byte4, byte5, byte6, byte7, byte8, byte9, byte10, byte11, byte12, byte13, byte14]
     Settings_Bytes.extend(bytearray(64 - len(Settings_Bytes)))
+
     ser = serial.Serial(Port, 9600, timeout=1)  # Adjust the Port and baud rate as necessary
 
     try:
@@ -207,6 +223,87 @@ def control_pulse_sequencer(Port, Action: str, Verbose=False):
         ser.close()
         time.sleep(0.01)
 
+
+def write_optional_pulses(Port, OptionalPulses, OptionalPulseLengths, Clock_Frequency=80,  Initial_Delay=119,
+                           Delay=127, Final_Delay=273, Verbose=False):
+    """Send optional pulse sequence to the device using 'o' command"""
+    
+    if len(OptionalPulses) != len(OptionalPulseLengths):
+        raise ValueError("OptionalPulses and OptionalPulseLengths must have the same length.")
+    
+    if len(OptionalPulses) > 10:
+        raise ValueError("Maximum 10 optional pulses allowed.")
+    
+    # Validate pulses
+    for pulse in OptionalPulses:
+        if not isinstance(pulse, str) or len(pulse) != 16 or not all(bit in '01' for bit in pulse):
+            raise ValueError("Each optional pulse must be a 16-bit binary string.")
+    
+    # Validate lengths
+    for length in OptionalPulseLengths:
+        if not isinstance(length, int) or length < 0 or length > 0xFFFFFFFF:
+            raise ValueError("Each optional pulse length must be a 32-bit unsigned integer.")
+    
+    Pulse_Lengths_Corrected = [(length * Clock_Frequency) - Delay for length in OptionalPulseLengths]
+    Pulse_Lengths_Corrected[0] -= Initial_Delay
+    Pulse_Lengths_Corrected = []
+    
+    # Correct pulse lengths
+    OptionalPulseLengths_Corrected = []
+    for i, length in enumerate(OptionalPulseLengths):
+        corrected_length = (length * Clock_Frequency)
+        if i == 0 and i < len(OptionalPulseLengths) - 1:
+            corrected_length -= Initial_Delay
+        elif i > 0 and i == len(OptionalPulseLengths) - 1:
+            corrected_length -= Final_Delay
+        elif i == 0 and len(OptionalPulseLengths) == 1:
+            corrected_length -= 271
+        else:
+            corrected_length -= Delay
+        if corrected_length < 0:
+            print(f"Pulse {i} length is too short after correction: {corrected_length}")
+            corrected_length = 10
+        OptionalPulseLengths_Corrected.append(corrected_length)
+
+    # Build command
+    Optional_Bytes = [ord('o')]
+
+    for i in range(len(OptionalPulses)):
+        # Convert pulse pattern to 2 bytes
+        pulse_value = int(OptionalPulses[i], 2)
+        Optional_Bytes.extend([pulse_value >> 8, pulse_value & 0xFF])
+
+        # Convert corrected length to 4 bytes
+        length = OptionalPulseLengths_Corrected[i]
+        Optional_Bytes.extend([
+            (length >> 24) & 0xFF,
+            (length >> 16) & 0xFF,
+            (length >> 8) & 0xFF,
+            length & 0xFF
+        ])
+
+    # Pad to 64 bytes, but put count in last byte
+    Optional_Bytes.extend([0] * (61 - len(Optional_Bytes)))
+    Optional_Bytes.append(len(OptionalPulses))  # Count in last byte
+    print(Optional_Bytes[61])
+
+    ser = serial.Serial(Port, 9600, timeout=1)
+    try:
+        ser.write(Optional_Bytes)
+        time.sleep(0.1)
+        
+        if Verbose:
+            print("Optional pulses sent:", end=" ")
+            for byte in Optional_Bytes:
+                print(byte, end=', ')
+            print()
+            
+            response = ser.read(64)
+            print("Response:", response)
+    finally:
+        ser.close()
+        time.sleep(0.01)
+
 import tkinter as tk
 from tkinter import ttk
 from .Custom_Tkinter import CustomBinarySpinbox
@@ -237,3 +334,116 @@ class PulseSequencerFrame(tk.Frame):
         print(f"Pulse Sequencer Output:{Bitstring}")
         pulse_out(self.pulse_sequencer_port, Bitstring)
 
+
+
+def read_pulse_sequencer_results(Port, Verbose=False):
+    """
+    Read measurement results from the pulse sequencer.
+    
+    Returns:
+        dict: Dictionary containing:
+            - 'cycle_number': Current cycle number (32-bit)
+            - 'state_readout_results': Number of times state readout was triggered (32-bit)
+            - 't1_counter': Total T1 counts accumulated over all cycles (32-bit)
+            - 't2_counter': Total T2 counts accumulated over all cycles (32-bit) 
+            - 't3_counter': Total T3 counts accumulated over all cycles (32-bit)
+            - 'optional_pulses': Number of times optional triggers were fired (32-bit)
+    """
+    import serial
+    import time
+    
+    # Send 'r' command to read results
+    byte_array = bytearray([ord('r')] + [0] * 63)  # 'r' command padded to 64 bytes
+    
+    ser = serial.Serial(Port, 9600, timeout=1)
+    
+    try:
+        # Send the read command
+        ser.write(byte_array)
+        time.sleep(0.1)  # Give device time to respond
+        
+        # Read the response
+        response = ser.read(64)
+        
+        if len(response) < 25:
+            raise ValueError("Incomplete response from device")
+        
+        # Parse the response according to firmware structure
+        # bufIN[0] = 'R' (confirmation)
+        # bufIN[1-4] = CycleNumber (32-bit, big-endian)
+        # bufIN[5-8] = StateReadOutResults (32-bit, big-endian) 
+        # bufIN[9-12] = T1Counter (32-bit, big-endian)
+        # bufIN[13-16] = T2Counter (32-bit, big-endian)
+        # bufIN[17-20] = T3Counter (32-bit, big-endian)
+        # bufIN[21-24] = OptionalTriggers (32-bit, big-endian)
+        
+        if response[0] != ord('R'):
+            raise ValueError(f"Unexpected response header: {response[0]} (expected {ord('R')})")
+        
+        cycle_number = (response[1] << 24) | (response[2] << 16) | (response[3] << 8) | response[4]
+        state_readout_results = (response[5] << 24) | (response[6] << 16) | (response[7] << 8) | response[8]
+        t1_counter = (response[9] << 24) | (response[10] << 16) | (response[11] << 8) | response[12]
+        t2_counter = (response[13] << 24) | (response[14] << 16) | (response[15] << 8) | response[16]
+        t3_counter = (response[17] << 24) | (response[18] << 16) | (response[19] << 8) | response[20]
+        optional_pulses = (response[21] << 24) | (response[22] << 16) | (response[23] << 8) | response[24]
+        windows = (response[25] << 24) | (response[26] << 16) | (response[27] << 8) | response[28]
+
+        results = {
+            'cycle_number': cycle_number,
+            'state_readout_results': state_readout_results,
+            't1_counter': t1_counter,
+            't2_counter': t2_counter,
+            't3_counter': t3_counter,
+            'optional_pulses': optional_pulses
+        }
+        
+        
+        print(f"Cycle Number: {cycle_number}")
+        print(f"State Readout Results: {state_readout_results}")
+        print(f"T1 Counter: {t1_counter}")
+        print(f"T2 Counter: {t2_counter}")
+        print(f"T3 Counter: {t3_counter}")
+        print(f"Optional Pulses Triggered: {optional_pulses}")
+        # print("Raw response:", [hex(b) for b in response[:25]])
+        print(f"Measurement Windows: {windows}")
+        return results
+        
+    except Exception as e:
+        if Verbose:
+            print(f"Error reading results: {e}")
+        raise
+        
+    finally:
+        ser.close()
+        time.sleep(0.01)
+
+def count_edges(com_port='COM5', channel=1, duration_ms=100):
+    """
+    Send a 'c' command to the device to count edges on TMR1/2/3 for a specified time.
+ 
+    :param com_port: Serial port (e.g., 'COM5')
+    :param channel: Timer channel (1, 2, or 3)
+    :param duration_ms: Duration in milliseconds to count edges
+    :return: Number of edges counted, or None on error
+    """
+    if channel not in (1, 2, 3):
+        raise ValueError("Channel must be 1, 2, or 3")
+ 
+    try:
+        with serial.Serial(com_port, 9600, timeout=20) as ser:
+            # Prepare message: 'c' + channel + 4-byte duration (big endian)
+            msg = struct.pack('>cB I', b'c', channel, duration_ms)
+            ser.write(msg)
+ 
+            # Expecting 5-byte reply: 'C' + 4-byte result
+            reply = ser.read(5)
+            if len(reply) != 5 or reply[0:1] != b'C':
+                print("Invalid reply:", reply)
+                return None
+ 
+            count = struct.unpack('>I', reply[1:])[0]
+            return count
+ 
+    except serial.SerialException as e:
+        print(f"Serial error: {e}")
+        return None

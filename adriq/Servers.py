@@ -4,6 +4,29 @@ import pickle
 import atexit
 import time
 
+import struct
+
+def send_msg(sock, data):
+    data = pickle.dumps(data)
+    length = struct.pack('!I', len(data))
+    sock.sendall(length + data)
+
+def recv_msg(sock):
+    raw_len = recvall(sock, 4)
+    if not raw_len:
+        return None
+    msg_len = struct.unpack('!I', raw_len)[0]
+    return pickle.loads(recvall(sock, msg_len))
+
+def recvall(sock, n):
+    data = b''
+    while len(data) < n:
+        packet = sock.recv(n - len(data))
+        if not packet:
+            return None
+        data += packet
+    return data
+
 class Server:
     def __init__(self, service_class, max_que=5, *service_args, **service_kwargs):
         # Create an instance of the service class with the provided arguments
@@ -26,26 +49,25 @@ class Server:
     def handle_client(self, client_socket):
         try:
             while True:
-                data = client_socket.recv(4096)
-                if not data:
+                command = recv_msg(client_socket)
+                if not command:
                     break
-                command = pickle.loads(data)
                 if command["method"] == "SHUTDOWN":
                     self.shutdown()
                     break
- 
+
                 method_name = command["method"]
                 args = command["args"]
                 kwargs = command["kwargs"]
- 
+
                 try:
                     method = getattr(self.service_instance, method_name)
                     result = method(*args, **kwargs)
                     response = {"success": True, "result": result}
                 except Exception as e:
                     response = {"success": False, "error": str(e)}
- 
-                client_socket.sendall(pickle.dumps(response))
+
+                send_msg(client_socket, response)
         except Exception as e:
             print(f"Error in handle_client: {e}")
         finally:
@@ -58,7 +80,7 @@ class Server:
             self.service_socket.close()
             if hasattr(self.service_instance, "close"):
                 self.service_instance.close()
- 
+                    
     @classmethod
     def master(cls, service_class, max_que, *service_args, **service_kwargs):
         try:
@@ -66,7 +88,7 @@ class Server:
             client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             client.connect((service_class.host, service_class.port))
             command = {"method": "SHUTDOWN", "args": [], "kwargs": {}}
-            client.sendall(pickle.dumps(command))
+            send_msg(client, command)  # Use the length-prefixed protocol!
             client.close()
             time.sleep(1)
         except ConnectionRefusedError:
@@ -95,9 +117,8 @@ class Client:
                             "args": args,
                             "kwargs": kwargs,
                         }
-                        client_socket.sendall(pickle.dumps(command))
-                        response_data = client_socket.recv(4096)
-                        response = pickle.loads(response_data)
+                        send_msg(client_socket, command)
+                        response = recv_msg(client_socket)
 
                         if response["success"]:
                             return response["result"]

@@ -5,10 +5,10 @@ import threading
 from datetime import datetime
 import csv
 import sys
-from adriq.Servers import Client
+from .Servers import Client
 import pyqtgraph as pg
 from PyQt5.QtWidgets import (
-    QWidget, QVBoxLayout, QLabel, QPushButton, QHBoxLayout, QSpinBox,
+    QWidget, QVBoxLayout, QLabel, QPushButton, QHBoxLayout, QSpinBox, QDoubleSpinBox,
     QScrollArea, QCheckBox, QFileDialog
 )
 from PyQt5.QtCore import QTimer
@@ -16,7 +16,7 @@ from datetime import datetime
 
 class ScopeReader:
     host = "localhost"
-    port = 8002
+    port = 8005
     def __init__(self, resource_id='USB0::0x1AB1::0x04CE::DS1ZA192712152::INSTR', rate=4):
         self.resource_id = resource_id
         self.rate = rate  # in Hz
@@ -93,6 +93,9 @@ class ScopeReader:
     def get_counts(self):
         with self.lock:
             return self.timestamp, self.voltages.copy()
+        
+    def get_channels(self):
+        return self.channels
 
     def close(self):
         self.stop_acquisition()
@@ -105,7 +108,7 @@ class ScopeReader:
 class ScopePlotter(QWidget):
     def __init__(self, scope_reader):
         super().__init__()
-        self.scope_reader = scope_reader
+        self.scope_reader = Client(scope_reader)
         self.setMinimumWidth(1000)
         self.layout = QVBoxLayout()
         self.setLayout(self.layout)
@@ -117,7 +120,7 @@ class ScopePlotter(QWidget):
         self.plot_widget.setLabel('bottom', "Sample Index", color='w', size='20pt')
         self.plot_widget.setYRange(-1, 14)  # <-- Add this line to fix y-axis
         self.layout.addWidget(self.plot_widget)
-        self.plot_widget.setFixedHeight(300)  # Set to half the previous/default height (adjust as needed)
+        # self.plot_widget.setFixedHeight(300)  # Set to half the previous/default height (adjust as needed)
         self.plot_widget.showGrid(x=True, y=True, alpha=0.3)
         self.plot_widget.setLabel('left', "Voltage", units='V', color='w', size='20pt')
         self.plot_widget.setLabel('bottom', "Sample Index", color='w', size='20pt')
@@ -134,7 +137,7 @@ class ScopePlotter(QWidget):
         self.rate_row.addWidget(self.update_rate_btn)
 
         self.rate_spinbox = QSpinBox()
-        self.rate_spinbox.setRange(1, 1000)  # Match LivePlotter's range
+        # self.rate_spinbox.setRange(1, 1000)  # Match LivePlotter's range
         self.rate_spinbox.setValue(self.scope_reader.get_rate())
         self.rate_spinbox.setStyleSheet("font-size: 16pt; padding: 10px 20px;")
         self.rate_row.addWidget(self.rate_spinbox)
@@ -187,6 +190,40 @@ class ScopePlotter(QWidget):
         self.log_writer = None
         self.log_file = None
         self.colors = ['w', 'r', 'g', 'b']
+
+        self.ylim_row = QHBoxLayout()
+
+        # --- Y-Limit Controls (added to the right of rate_spinbox) ---
+        self.ymin_label = QLabel("Y min:")
+        self.rate_row.addWidget(self.ymin_label)
+        self.ymin_spinbox = QDoubleSpinBox()
+        self.ymin_spinbox.setRange(-1000, 1000)
+        self.ymin_spinbox.setValue(-1)
+        self.rate_row.addWidget(self.ymin_spinbox)
+
+        self.ymax_label = QLabel("Y max:")
+        self.rate_row.addWidget(self.ymax_label)
+        self.ymax_spinbox = QDoubleSpinBox()
+        self.ymax_spinbox.setRange(-1000, 1000)
+        self.ymax_spinbox.setValue(14)
+        self.rate_row.addWidget(self.ymax_spinbox)
+
+        self.set_ylim_button = QPushButton("Set Y Limits")
+        self.set_ylim_button.clicked.connect(self.set_y_limits)
+        self.rate_row.addWidget(self.set_ylim_button)
+
+        self.rate_row.addStretch(1)
+
+        self.channel_label = QLabel("Channel")
+        self.channel_label.setStyleSheet("font-size: 16pt;")
+        self.rate_row.addWidget(self.channel_label)
+
+
+
+    def set_y_limits(self):
+        ymin = self.ymin_spinbox.value()
+        ymax = self.ymax_spinbox.value()
+        self.plot_widget.setYRange(ymin, ymax)
         
 
     def toggle_acquisition(self):
@@ -203,13 +240,11 @@ class ScopePlotter(QWidget):
 
 
     def create_channel_checkboxes(self):
-        for ch in self.scope_reader.channels:
+        for ch in self.scope_reader.get_channels():
             checkbox = QCheckBox(ch)
             checkbox.setChecked(True)
             self.checkbox_layout.addWidget(checkbox)
             self.channel_checkboxes[ch] = checkbox
-
-    
 
     def update_rate(self, new_rate):
         self.scope_reader.update_rate(new_rate)
